@@ -38,6 +38,7 @@ get_syntax() {
         *Makefile) echo "makefile" ;;
         *.php) echo "php" ;;
         *.xml) echo "xml" ;;
+        Dockerfile) echo "dockerfile" ;;
         *.ps1) echo "powershell" ;;
         *.c|*.h) echo "c" ;;
         *.rs) echo "rs" ;;
@@ -107,6 +108,7 @@ print_files() {
         -name "*.proto" -o \
         -name "*.sum" -o \
         -name "*.nix" -o \
+        -name "Dockerfile" -o \
         -name "Makefile" \
     \) -print )
 
