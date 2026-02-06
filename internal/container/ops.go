@@ -14,7 +14,6 @@ import (
 	"github.com/moby/moby/client"
 )
 
-// DiscoverBinFiles scans the container for .bin files in the fake directory
 func DiscoverBinFiles(ctx context.Context, cli *client.Client, fakePath string) ([]string, error) {
 	resp, err := cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config: &container.Config{
@@ -25,9 +24,7 @@ func DiscoverBinFiles(ctx context.Context, cli *client.Client, fakePath string) 
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		_, _ = cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true})
-	}()
+	defer func() { _, _ = cli.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true}) }()
 
 	if _, err := cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		return nil, err
@@ -40,35 +37,25 @@ func DiscoverBinFiles(ctx context.Context, cli *client.Client, fakePath string) 
 	case <-statusCh.Result:
 	}
 
-	out, err := cli.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true})
-	if err != nil {
-		return nil, err
-	}
+	out, _ := cli.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true})
 	defer out.Close()
 
 	var buf bytes.Buffer
 	stdcopy.StdCopy(&buf, io.Discard, out)
 
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	var files []string
-	seen := make(map[string]struct{})
-	for _, l := range lines {
-		l = strings.TrimSpace(l)
-		if strings.HasSuffix(l, ".bin") {
-			if _, ok := seen[l]; !ok {
-				seen[l] = struct{}{}
-				files = append(files, l)
-			}
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.TrimSpace(l) != "" {
+			files = append(files, strings.TrimSpace(l))
 		}
 	}
 	return files, nil
 }
 
-// RunContainerTest spins up a sibling container to execute the worker check
-func RunContainerTest(ctx context.Context, cli *client.Client, strategy string, targetGroup string) (model.WorkerResult, string) {
+func RunContainerTest(ctx context.Context, cli *client.Client, args string, targetGroup string) (model.WorkerResult, string) {
 	config := &container.Config{
 		Image: model.ImageName,
-		Cmd:   []string{"worker", strategy, targetGroup},
+		Cmd:   []string{"worker", args, targetGroup},
 		Tty:   false,
 	}
 	hostConfig := &container.HostConfig{
@@ -80,37 +67,28 @@ func RunContainerTest(ctx context.Context, cli *client.Client, strategy string, 
 	if err != nil {
 		return model.WorkerResult{Error: "Docker Create: " + err.Error()}, ""
 	}
-	containerID := createResp.ID
-	defer func() {
-		_, _ = cli.ContainerRemove(context.Background(), containerID, client.ContainerRemoveOptions{Force: true})
-	}()
+	defer cli.ContainerRemove(context.Background(), createResp.ID, client.ContainerRemoveOptions{Force: true})
 
-	if _, err := cli.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
+	if _, err := cli.ContainerStart(ctx, createResp.ID, client.ContainerStartOptions{}); err != nil {
 		return model.WorkerResult{Error: "Docker Start: " + err.Error()}, ""
 	}
 
-	waitRes := cli.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	waitRes := cli.ContainerWait(ctx, createResp.ID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
 	select {
-	case err := <-waitRes.Error:
-		if err != nil {
-			return model.WorkerResult{Error: "Docker Wait: " + err.Error()}, ""
-		}
 	case <-waitRes.Result:
+	case <-ctx.Done():
+		return model.WorkerResult{Error: "Timeout"}, ""
 	}
 
-	out, _ := cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	out, _ := cli.ContainerLogs(ctx, createResp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
 	defer out.Close()
-	var stdoutBuf, stderrBuf bytes.Buffer
-	_, _ = stdcopy.StdCopy(&stdoutBuf, &stderrBuf, out)
 
-	stdoutStr := strings.TrimSpace(stdoutBuf.String())
-	if stdoutStr == "" {
-		return model.WorkerResult{Error: "Empty stdout"}, stderrBuf.String()
-	}
+	var stdout, stderr bytes.Buffer
+	stdcopy.StdCopy(&stdout, &stderr, out)
 
 	var res model.WorkerResult
-	if err := json.Unmarshal([]byte(stdoutStr), &res); err != nil {
-		return model.WorkerResult{Error: "JSON Parse: " + err.Error()}, stderrBuf.String()
+	if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
+		return model.WorkerResult{Error: "JSON Error: " + err.Error()}, stderr.String()
 	}
-	return res, stderrBuf.String()
+	return res, stderr.String()
 }
