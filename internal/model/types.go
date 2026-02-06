@@ -17,9 +17,8 @@ const (
 	DefaultWebThreshold    = 1
 	CheckTimeout           = 4000 * time.Millisecond
 
-	// Evolution Constants
 	MaxGenerations    = 5  // Общий лимит, если не переопределен фазой
-	TargetSuccessRate = 95 // Целевой % успеха, чтобы считать стратегию "идеальной"
+	TargetSuccessRate = 80 // Целевой % успеха, чтобы считать стратегию "идеальной"
 	PopulationSize    = 100
 	ElitesCount       = 8
 )
@@ -47,6 +46,7 @@ type StrategyResult struct {
 	Duration time.Duration
 	WorkerResult
 	SystemLogs string
+	Complexity int // New metric: Repeats + TTL costs
 }
 
 type DPIConfig struct {

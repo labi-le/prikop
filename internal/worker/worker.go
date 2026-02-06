@@ -28,13 +28,14 @@ func RunWorkerMode(strategy string, groupName string) {
 		fatalJSON("No strategy provided in args")
 	}
 
+	// Expanded port list based on Discord requirements and common blocked services
+	// TCP: 80, 443, 2053, 2083, 2087, 2096, 8443
+	// UDP: 443, 19000-65535 (Covering Discord voice ranges)
 	cmds := [][]string{
 		{"iptables", "-t", "mangle", "-F"},
-		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "tcp", "--dport", "80", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
-		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "tcp", "--dport", "443", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
+		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "tcp", "-m", "multiport", "--dports", "80,443,2053,2083,2087,2096,8443", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
 		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "443", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
-		// Add High ports for Discord UDP
-		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "50000:65535", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
+		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "19000:65535", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
 	}
 	for _, args := range cmds {
 		cmd := exec.Command(args[0], args[1:]...)

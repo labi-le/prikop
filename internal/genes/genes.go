@@ -12,12 +12,12 @@ import (
 )
 
 const (
-	maxRepeats  = 20
+	// Hard cap for mutation limits
+	maxRepeats  = 10
 	maxSplitPos = 8
 	maxTTL      = 12
 )
 
-// ParseConfig ... (без изменений)
 func ParseConfig(s string) model.DPIConfig {
 	c := model.DPIConfig{Mode: "fake", Repeats: 1, FakeTLSMod: "none"}
 
@@ -69,7 +69,7 @@ func ParseConfig(s string) model.DPIConfig {
 	return c
 }
 
-// BreedingProtocol executes the evolutionary step with ADAPTIVE LOGIC
+// BreedingProtocol now uses the SORTED results which are already ranked by Weighted Score (Success - Penalty)
 func BreedingProtocol(parents []model.StrategyResult, populationSize int, discoveredBins []string) []string {
 	var nextGen []string
 	seen := make(map[string]struct{})
@@ -83,100 +83,103 @@ func BreedingProtocol(parents []model.StrategyResult, populationSize int, discov
 		}
 	}
 
-	// 1. Calculate the "Fitness Stability" of the best parent
-	// If the best parent is performing well (>60%), we reduce chaos significantly.
-	isStable := false
-	if len(parents) > 0 {
-		best := parents[0]
-		if best.TotalCount > 0 {
-			rate := (best.SuccessCount * 100) / best.TotalCount
-			if rate > 60 {
-				isStable = true
-			}
-		}
+	// 1. Elitism
+	topCount := model.ElitesCount
+	if len(parents) < topCount {
+		topCount = len(parents)
+	}
+	for i := 0; i < topCount; i++ {
+		add(parents[i].Strategy)
 	}
 
-	// 2. Elitism: Keep parents
-	for _, p := range parents {
-		add(p.Strategy)
-	}
-
-	// 3. Adaptive Mutation Strategy
-	fineMutationsPerParent := 6
-	if isStable {
-		// If we are stable, increase fine mutations to saturate the population with variations of the good gene
-		fineMutationsPerParent = 12
-	}
-
-	// High Fidelity Mutations (Fine Tuning)
-	for _, p := range parents {
+	// 2. Adaptive Mutation
+	for i := 0; i < topCount; i++ {
+		p := parents[i]
 		cfg := ParseConfig(p.Strategy)
-		for i := 0; i < fineMutationsPerParent; i++ {
+
+		if cfg.Repeats > 4 {
+			pruned := cfg
+			pruned.Repeats = cfg.Repeats - 1
+			add(pruned.String())
+
+			pruned2 := cfg
+			pruned2.Repeats = cfg.Repeats / 2
+			if pruned2.Repeats < 1 {
+				pruned2.Repeats = 1
+			}
+			add(pruned2.String())
+		}
+
+		numChildren := model.ElitesCount - i
+		if numChildren < 3 {
+			numChildren = 3
+		}
+
+		for j := 0; j < numChildren; j++ {
 			mutant := cfg
 			MutateFine(&mutant, discoveredBins)
 			add(mutant.String())
 		}
 	}
 
-	// Cross-Over
+	// 3. Cross-Over
 	if len(parents) >= 2 {
-		for i := 0; i < len(parents)-1; i++ {
-			p1 := ParseConfig(parents[i].Strategy)
-			p2 := ParseConfig(parents[rand.Intn(len(parents))].Strategy)
+		for i := 0; i < 10; i++ {
+			idx1 := rand.Intn(topCount)
+			idx2 := rand.Intn(topCount)
+			if idx1 == idx2 {
+				continue
+			}
+			p1 := ParseConfig(parents[idx1].Strategy)
+			p2 := ParseConfig(parents[idx2].Strategy)
 
 			c1 := p1
+			c1.Repeats = p2.Repeats
 			c1.TTL = p2.TTL
 			c1.AutoTTL = p2.AutoTTL
-			c1.Wssize = p2.Wssize
 			add(c1.String())
-
-			c2 := p1
-			c2.SplitPos = p2.SplitPos
-			c2.SplitSeqOvl = p2.SplitSeqOvl
-			add(c2.String())
 		}
 	}
 
-	// 4. Fill Remaining Spots
+	// 4. Fill Remaining with Chaos
 	remaining := populationSize - len(nextGen)
 	if remaining > 0 {
-		if isStable {
-			// CONSERVATIVE MODE: Fill with more fine mutations of the BEST parent only
-			// We discard "Chaos" because we already have a working baseline.
-			bestCfg := ParseConfig(parents[0].Strategy)
-			for i := 0; i < remaining; i++ {
-				m := bestCfg
-				// Apply slightly more aggressive fine mutation
-				MutateFine(&m, discoveredBins)
-				if rand.Float64() > 0.7 {
-					MutateWild(&m) // Small chance of wild mutation on good gene
-				}
-				add(m.String())
-			}
-		} else {
-			// EXPLORATION MODE: We are lost, inject pure chaos to find a path
-			chaos := GenerateChaosPopulation(remaining, discoveredBins)
-			for _, s := range chaos {
-				add(s)
-			}
+		chaos := GenerateChaosPopulation(remaining, discoveredBins)
+		for _, s := range chaos {
+			add(s)
 		}
 	}
 
 	return nextGen
 }
 
-// ... (MutateFine, MutateWild, randomSplitPos, GenerateInitialPopulation, GenerateChaosPopulation, Deduplicate без изменений)
 func MutateFine(c *model.DPIConfig, discoveredBins []string) {
 	r := rand.Float64()
 
-	if r < 0.25 {
-		c.Repeats += rand.Intn(3) - 1
-		if c.Repeats < 1 {
-			c.Repeats = 1
+	if c.Repeats > 4 && rand.Float64() > 0.4 {
+		c.Repeats--
+		return
+	}
+	if (c.TTL > 3 || c.AutoTTL > 3) && rand.Float64() > 0.4 {
+		if c.AutoTTL > 0 {
+			c.AutoTTL--
+		} else {
+			c.TTL--
 		}
-		if c.Repeats > maxRepeats {
-			c.Repeats = maxRepeats
+		return
+	}
+
+	if r < 0.30 {
+		delta := 0
+		if c.Repeats >= maxRepeats {
+			delta = -1
+		} else if c.Repeats <= 1 {
+			delta = 1
+		} else {
+			delta = rand.Intn(3) - 1
 		}
+		c.Repeats += delta
+
 		if val, err := strconv.Atoi(c.SplitPos); err == nil && val > 0 {
 			val += rand.Intn(3) - 1
 			if val < 1 {
@@ -187,10 +190,10 @@ func MutateFine(c *model.DPIConfig, discoveredBins []string) {
 			}
 			c.SplitPos = strconv.Itoa(val)
 		}
-	}
-	if r >= 0.25 && r < 0.50 {
+	} else if r < 0.60 {
+		change := rand.Intn(3) - 1
 		if c.AutoTTL > 0 {
-			c.AutoTTL += rand.Intn(3) - 1
+			c.AutoTTL += change
 			if c.AutoTTL < 0 {
 				c.AutoTTL = 0
 			}
@@ -198,7 +201,7 @@ func MutateFine(c *model.DPIConfig, discoveredBins []string) {
 				c.AutoTTL = maxTTL
 			}
 		} else {
-			c.TTL += rand.Intn(3) - 1
+			c.TTL += change
 			if c.TTL < 0 {
 				c.TTL = 0
 			}
@@ -206,19 +209,14 @@ func MutateFine(c *model.DPIConfig, discoveredBins []string) {
 				c.TTL = maxTTL
 			}
 		}
-	}
-	if r >= 0.50 && r < 0.75 {
+	} else if r < 0.80 {
 		if rand.Float64() > 0.5 && len(discoveredBins) > 0 {
 			c.FakeTLS = discoveredBins[rand.Intn(len(discoveredBins))]
 		} else {
-			if c.FakeTLSMod == "none" {
-				c.FakeTLSMod = "rndsni"
-			} else if c.FakeTLSMod == "rndsni" {
-				c.FakeTLSMod = "none"
-			}
+			mods := []string{"none", "rndsni"}
+			c.FakeTLSMod = mods[rand.Intn(len(mods))]
 		}
-	}
-	if r >= 0.75 {
+	} else {
 		if c.Wssize == "" {
 			c.Wssize = "1:6"
 		} else {
@@ -233,10 +231,11 @@ func MutateFine(c *model.DPIConfig, discoveredBins []string) {
 }
 
 func MutateWild(c *model.DPIConfig) {
+	// ... (No changes needed here, keeping strict) ...
 	r := rand.Intn(9)
 	switch r {
 	case 0:
-		c.Repeats = rand.Intn(maxRepeats) + 1
+		c.Repeats = rand.Intn(4) + 1
 	case 1:
 		modes := []string{"fake", "multidisorder", "multisplit", "fakedsplit", "ipfrag1"}
 		c.Mode = modes[rand.Intn(len(modes))]
@@ -253,7 +252,7 @@ func MutateWild(c *model.DPIConfig) {
 		c.AnyProtocol = !c.AnyProtocol
 	case 5:
 		c.AutoTTL = 0
-		c.TTL = rand.Intn(maxTTL)
+		c.TTL = rand.Intn(5) + 1
 	case 6:
 		c.SplitSeqOvl = rand.Intn(2)
 	case 7:
@@ -269,25 +268,30 @@ func MutateWild(c *model.DPIConfig) {
 
 func randomSplitPos(c *model.DPIConfig) {
 	options := []string{
-		"1", "2", "3", "4",
+		"1", "2", "3",
 		"1,sniext+1", "2,sniext+1",
 		"1,midsld", "2,midsld",
-		"1,0x0001",
 	}
 	c.SplitPos = options[rand.Intn(len(options))]
 }
 
-func GenerateInitialPopulation(size int, discoveredBins []string, fakePath string) []string {
+// GenerateInitialPopulation now accepts explicit strategies from the phase config
+func GenerateInitialPopulation(size int, discoveredBins []string, fakePath string, explicitStrategies []string) []string {
 	var s []string
-	s = append(s, "--dpi-desync=multisplit --dpi-desync-split-pos=1,sniext+1 --dpi-desync-split-seqovl=1")
-	s = append(s, "--dpi-desync=multisplit --dpi-desync-split-pos=1,sniext+1 --dpi-desync-split-seqovl=1 --dpi-desync-repeats=2")
 
+	// 1. Explicit Strategies (Passed from Phase configuration)
+	for _, strat := range explicitStrategies {
+		// Fix paths from /opt/zapret/... to container path if needed
+		// We handle this here to allow raw strings in runner.go
+		strat = strings.ReplaceAll(strat, "/opt/zapret/files/fake", fakePath)
+		s = append(s, strat)
+	}
+
+	// 2. Base Templates (Effective everywhere, always included)
 	baseTemplates := []string{
-		"--dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fooling=ts --dpi-desync-fake-tls=%s --dpi-desync-fake-tls-mod=none",
 		"--dpi-desync=fake --dpi-desync-repeats=4 --dpi-desync-fooling=md5sig --dpi-desync-fake-tls=%s --dpi-desync-fake-tls-mod=rndsni",
 	}
 	baseFiles := []string{
-		"tls_clienthello_www_google_com.bin",
 		"tls_clienthello_iana_org.bin",
 	}
 
@@ -296,16 +300,22 @@ func GenerateInitialPopulation(size int, discoveredBins []string, fakePath strin
 		s = append(s, fmt.Sprintf(tpl, fullPath))
 	}
 
+	// 3. Simple efficient baselines (Always included)
 	baseStatic := []string{
 		"--dpi-desync=multisplit --dpi-desync-split-pos=1 --dpi-desync-repeats=3",
-		"--dpi-desync=multisplit --dpi-desync-split-pos=2 --dpi-desync-split-seqovl=1 --dpi-desync-repeats=5",
 		"--dpi-desync=ipfrag1 --dpi-desync-repeats=3",
 		"--dpi-desync=multidisorder --dpi-desync-split-pos=1 --wssize=1:6",
+		"--dpi-desync=fake --dpi-desync-repeats=3 --dpi-desync-fooling=badsum",
 	}
 	s = append(s, baseStatic...)
 
-	chaos := GenerateChaosPopulation(size-len(s), discoveredBins)
-	s = append(s, chaos...)
+	// 4. Fill remaining spots with Chaos
+	chaosNeeded := size - len(s)
+	if chaosNeeded > 0 {
+		chaos := GenerateChaosPopulation(chaosNeeded, discoveredBins)
+		s = append(s, chaos...)
+	}
+
 	return Deduplicate(s)
 }
 
@@ -317,7 +327,8 @@ func GenerateChaosPopulation(n int, discoveredBins []string) []string {
 		c := model.DPIConfig{}
 		modes := []string{"fake", "fake", "multidisorder", "multisplit", "fakedsplit"}
 		c.Mode = modes[rand.Intn(len(modes))]
-		c.Repeats = rand.Intn(maxRepeats-1) + 1
+
+		c.Repeats = rand.Intn(4) + 1
 
 		if c.Mode == "fake" || c.Mode == "fakedsplit" {
 			fList := []string{"ts", "md5sig", "badsum", "datanoack"}
@@ -340,10 +351,11 @@ func GenerateChaosPopulation(n int, discoveredBins []string) []string {
 		if rand.Intn(3) == 0 {
 			c.Wssize = "1:6"
 		}
+
 		if rand.Intn(2) == 0 {
-			c.TTL = rand.Intn(maxTTL-1) + 1
-		} else {
-			c.AutoTTL = rand.Intn(maxTTL/2) + 1
+			c.TTL = rand.Intn(5) + 1
+		} else if rand.Intn(3) == 0 {
+			c.AutoTTL = rand.Intn(3) + 1
 		}
 		s = append(s, c.String())
 	}

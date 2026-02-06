@@ -22,16 +22,59 @@ type Config struct {
 }
 
 type Phase struct {
-	Name        string
-	TargetGroup string
-	Filters     string
-	MaxGens     int
-	SuccessRate int // Percentage 0-100 required to stop early
+	Name              string
+	TargetGroup       string
+	Filters           string
+	MaxGens           int
+	SuccessRate       int
+	InitialStrategies []string
 }
 
 var (
 	discoveredBins []string
+	printMu        sync.Mutex
 )
+
+func safePrintf(format string, a ...interface{}) {
+	printMu.Lock()
+	defer printMu.Unlock()
+	fmt.Print("\r\033[K")
+	fmt.Printf(format, a...)
+}
+
+func safeProgress(format string, a ...interface{}) {
+	printMu.Lock()
+	defer printMu.Unlock()
+	fmt.Print("\r\033[K")
+	fmt.Printf(format, a...)
+}
+
+// getDiscordStrategies returns heavy-hitters optimized for Discord voice/gateway
+func getDiscordStrategies() []string {
+	return []string{
+		"--dpi-desync=multisplit --dpi-desync-split-seqovl=652 --dpi-desync-split-pos=2 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin",
+		"--dpi-desync=fake,multisplit --dpi-desync-split-seqovl=681 --dpi-desync-split-pos=1 --dpi-desync-fooling=ts --dpi-desync-repeats=8 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com",
+		"--dpi-desync=fake,multisplit --dpi-desync-repeats=6 --dpi-desync-fooling=badseq --dpi-desync-badseq-increment=1000 --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin",
+		"--dpi-desync=multisplit --dpi-desync-split-seqovl=681 --dpi-desync-split-pos=1 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin",
+		"--dpi-desync=multisplit --dpi-desync-split-pos=2,sniext+1 --dpi-desync-split-seqovl=679 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin",
+		"--dpi-desync=fake,multisplit --dpi-desync-split-seqovl=681 --dpi-desync-split-pos=1 --dpi-desync-fooling=badseq --dpi-desync-badseq-increment=10000000 --dpi-desync-repeats=8 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com",
+		"--dpi-desync=fake,multisplit --dpi-desync-split-seqovl=681 --dpi-desync-split-pos=1 --dpi-desync-fooling=ts --dpi-desync-repeats=8 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com",
+	}
+}
+
+// getGoogleStrategies returns lighter strategies often effective for GGC
+func getGoogleStrategies() []string {
+	return []string{
+		"--dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fooling=ts --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=none",
+		"--dpi-desync=fake --dpi-desync-fake-tls-mod=none --dpi-desync-repeats=6 --dpi-desync-fooling=badseq --dpi-desync-badseq-increment=2",
+		"--dpi-desync=fake,fakedsplit --dpi-desync-split-pos=1 --dpi-desync-fooling=badseq --dpi-desync-badseq-increment=2 --dpi-desync-repeats=8 --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com",
+		"--dpi-desync=fake --dpi-desync-repeats=6 --dpi-desync-fooling=badseq --dpi-desync-badseq-increment=2 --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin",
+		"--dpi-desync=fake,fakedsplit --dpi-desync-repeats=6 --dpi-desync-fooling=ts --dpi-desync-fakedsplit-pattern=0x00 --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin",
+		"--dpi-desync=fake,multidisorder --dpi-desync-split-pos=1,midsld --dpi-desync-repeats=11 --dpi-desync-fooling=badseq --dpi-desync-fake-tls=0x00000000 --dpi-desync-fake-tls=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com",
+		"--dpi-desync=fake,hostfakesplit --dpi-desync-fake-tls-mod=rnd,dupsid,sni=www.google.com --dpi-desync-hostfakesplit-mod=host=www.google.com,altorder=1 --dpi-desync-fooling=ts",
+		"--dpi-desync=hostfakesplit --dpi-desync-repeats=4 --dpi-desync-fooling=ts --dpi-desync-hostfakesplit-mod=host=www.google.com",
+	}
+}
 
 func Run(cfg Config) {
 	ctx := context.Background()
@@ -41,87 +84,92 @@ func Run(cfg Config) {
 	}
 	defer cli.Close()
 
-	fmt.Println(">>> 🔎 Discovering .bin files inside the container...")
+	safePrintf(">>> 🔎 Discovering .bin files inside the container...\n")
 	bins, err := container.DiscoverBinFiles(ctx, cli, cfg.FakePath)
 	if err != nil || len(bins) == 0 {
 		log.Fatalf("❌ FATAL: Failed to discover bins or no bins found. Err: %v", err)
 	}
 	discoveredBins = bins
-	fmt.Printf(">>> ✅ Found %d .bin files.\n", len(discoveredBins))
+	safePrintf(">>> ✅ Found %d .bin files.\n", len(discoveredBins))
 
-	// SPLIT PHASES FOR PROTOCOL ISOLATION
-	// NOTE: Using model.MaxGenerations and model.TargetSuccessRate where applicable
 	phases := []Phase{
 		{
-			Name:        "GOOGLE (TCP)",
-			TargetGroup: "google_tcp",
-			Filters:     fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", cfg.TargetsPath),
-			MaxGens:     model.MaxGenerations,
-			SuccessRate: model.TargetSuccessRate, // Pure TCP should hit high rate
+			Name:              "GOOGLE (TCP)",
+			TargetGroup:       "google_tcp",
+			Filters:           fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", cfg.TargetsPath),
+			MaxGens:           15,
+			SuccessRate:       66,
+			InitialStrategies: getGoogleStrategies(),
 		},
 		{
-			Name:        "GOOGLE (UDP/QUIC)",
-			TargetGroup: "google_udp",
-			Filters:     fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", cfg.TargetsPath),
-			MaxGens:     20,
-			SuccessRate: 80, // UDP is harder/flakier
+			Name:              "GOOGLE (UDP/QUIC)",
+			TargetGroup:       "google_udp",
+			Filters:           fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", cfg.TargetsPath),
+			SuccessRate:       66,
+			MaxGens:           20,
+			InitialStrategies: getGoogleStrategies(),
 		},
 		{
-			Name:        "DISCORD (TCP)",
-			TargetGroup: "discord_tcp",
-			Filters:     fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/discord.txt", cfg.TargetsPath),
-			MaxGens:     20,
-			SuccessRate: model.TargetSuccessRate,
+			Name:              "DISCORD (TCP)",
+			TargetGroup:       "discord_tcp",
+			Filters:           fmt.Sprintf("--filter-tcp=80,443,2053,2083,2087,2096,8443 --hostlist=%s/discord.txt", cfg.TargetsPath),
+			MaxGens:           15,
+			SuccessRate:       model.TargetSuccessRate,
+			InitialStrategies: getDiscordStrategies(),
 		},
 		{
-			Name:        "DISCORD (UDP)",
-			TargetGroup: "discord_udp",
-			Filters:     fmt.Sprintf("--filter-udp=443,50000-65535 --hostlist=%s/discord.txt", cfg.TargetsPath),
-			MaxGens:     20,
-			SuccessRate: 90,
+			Name:              "DISCORD (UDP)",
+			TargetGroup:       "discord_udp",
+			Filters:           fmt.Sprintf("--filter-udp=443,19000-65535 --hostlist=%s/discord.txt", cfg.TargetsPath),
+			MaxGens:           20,
+			SuccessRate:       90,
+			InitialStrategies: getDiscordStrategies(),
 		},
 		{
 			Name:        "GENERAL",
 			TargetGroup: "general",
-			Filters:     "--filter-tcp=80,443", // Catch-all for remaining traffic
+			Filters:     "--filter-tcp=80,443",
 			MaxGens:     model.MaxGenerations,
 			SuccessRate: 80,
+			// No explicit heavy strategies for general, rely on defaults/chaos
+			InitialStrategies: nil,
 		},
 	}
-	// ... (остальной код runner.go без изменений)
+
 	var finalStrategies []string
 
 	for _, p := range phases {
-		fmt.Printf("\n>>> 🚀 STARTING PHASE: %s\n", p.Name)
-		fmt.Printf(">>> 🛡️  Filters: %s\n", p.Filters)
+		safePrintf("\n>>> 🚀 STARTING PHASE: %s\n", p.Name)
+		safePrintf(">>> 🛡️  Filters: %s\n", p.Filters)
+
+		if p.MaxGens == 0 {
+			p.MaxGens = model.MaxGenerations
+		}
 
 		best := runEvolutionPhase(ctx, cli, p, cfg.FakePath)
 
 		if best.Strategy != "" {
-			// Clean up strategy string for final output
-			// We combine the static filter with the evolved strategy
 			final := fmt.Sprintf("%s %s", p.Filters, best.Strategy)
 			finalStrategies = append(finalStrategies, final)
-			fmt.Printf("\n>>> 🏆 PHASE %s WINNER: %s\n", p.Name, final)
+			safePrintf("\n>>> 🏆 PHASE %s WINNER: %s\n", p.Name, final)
 		} else {
-			fmt.Printf("\n>>> ⚠️  PHASE %s FAILED (No working strategy found)\n", p.Name)
+			safePrintf("\n>>> ⚠️  PHASE %s FAILED (No working strategy found)\n", p.Name)
 		}
 	}
 
-	fmt.Println("\n=======================================================")
-	fmt.Println(">>> 🎉 FINAL CONFIGURATION (Combine with --new)")
-	fmt.Println("=======================================================")
+	safePrintf("\n=======================================================\n")
+	safePrintf(">>> 🎉 FINAL CONFIGURATION (Combine with --new)\n")
+	safePrintf("=======================================================\n")
 
 	printFinalConfig(finalStrategies)
 }
 
 func printFinalConfig(strats []string) {
 	if len(strats) == 0 {
-		fmt.Println("# No working strategies found.")
+		safePrintf("# No working strategies found.\n")
 		return
 	}
-
-	fmt.Println(strings.Join(strats, " --new "))
+	safePrintf("%s\n", strings.Join(strats, " --new "))
 }
 
 func runEvolutionPhase(ctx context.Context, cli *client.Client, p Phase, fakePath string) model.StrategyResult {
@@ -129,56 +177,86 @@ func runEvolutionPhase(ctx context.Context, cli *client.Client, p Phase, fakePat
 	var globalBest model.StrategyResult
 	totalAttempts := 0
 
-	currentGenStrats := genes.GenerateInitialPopulation(model.PopulationSize, discoveredBins, fakePath)
+	// Pass explicit InitialStrategies defined in the Phase struct
+	currentGenStrats := genes.GenerateInitialPopulation(model.PopulationSize, discoveredBins, fakePath, p.InitialStrategies)
 
 	for gen := 0; gen < p.MaxGens; gen++ {
-		fmt.Printf("\n>>> 🧬 [%s] GEN %d/%d (%d strategies)\n", p.Name, gen, p.MaxGens, len(currentGenStrats))
+		safePrintf("\n>>> 🧬 [%s] GEN %d/%d (%d strategies)\n", p.Name, gen, p.MaxGens, len(currentGenStrats))
 
 		results, _ := executeBatch(ctx, cli, currentGenStrats, p.Filters, p.TargetGroup, history, &totalAttempts, &globalBest)
 
-		// Check for elite survivor
 		if len(results) > 0 {
 			genBest := results[0]
-			if genBest.SuccessCount > globalBest.SuccessCount ||
-				(genBest.SuccessCount == globalBest.SuccessCount && genBest.Duration < globalBest.Duration) {
+
+			// Logic to update global best
+			isBetter := false
+
+			if globalBest.TotalCount == 0 {
+				isBetter = true
+			} else {
+				// Calculate weighted scores
+				gBestScore := calculateWeightedScore(globalBest)
+				genBestScore := calculateWeightedScore(genBest)
+
+				if genBestScore > gBestScore {
+					isBetter = true
+				}
+			}
+
+			if isBetter {
+				oldBest := globalBest
 				globalBest = genBest
-				fmt.Printf(">>> 🏆 [%s] NEW BEST: [%d/%d] %s\n", p.Name, globalBest.SuccessCount, globalBest.TotalCount, globalBest.Strategy)
+				safePrintf(">>> 🏆 [%s] NEW BEST (Score: %.2f): [%d/%d] C:%d %s\n",
+					p.Name,
+					calculateWeightedScore(globalBest),
+					globalBest.SuccessCount,
+					globalBest.TotalCount,
+					globalBest.Complexity,
+					globalBest.Strategy)
+
+				if oldBest.TotalCount > 0 {
+					// Debug info on replacement
+					safePrintf("    (Replaced: [%d/%d] C:%d)\n", oldBest.SuccessCount, oldBest.TotalCount, oldBest.Complexity)
+				}
 			}
 		}
 
-		// Calculate Success Percentage
 		successPct := 0
 		if globalBest.TotalCount > 0 {
 			successPct = (globalBest.SuccessCount * 100) / globalBest.TotalCount
 		}
 
 		if successPct >= p.SuccessRate {
-			fmt.Printf("\n>>> ✅ [%s] Target Success Rate (%d%%) Achieved!\n", p.Name, p.SuccessRate)
+			safePrintf("\n>>> ✅ [%s] Target Success Rate (%d%%) Achieved!\n", p.Name, p.SuccessRate)
 			break
 		}
 
-		// Selection
-		var survivors []model.StrategyResult
-		if globalBest.Strategy != "" {
-			survivors = append(survivors, globalBest)
-		}
-		// Pick top elites
-		for i := 0; i < len(results) && len(survivors) < model.ElitesCount+1; i++ {
-			if results[i].Strategy != globalBest.Strategy {
-				survivors = append(survivors, results[i])
-			}
-		}
-
-		if len(survivors) == 0 {
-			fmt.Println("\033[33m>>> Gen failed. Injecting chaos.\033[0m")
+		// Selection for next generation
+		if len(results) == 0 {
+			safePrintf("\033[33m>>> Gen failed. Injecting chaos.\033[0m\n")
 			currentGenStrats = genes.GenerateChaosPopulation(model.PopulationSize, discoveredBins)
 			continue
 		}
 
-		currentGenStrats = genes.BreedingProtocol(survivors, model.PopulationSize, discoveredBins)
+		currentGenStrats = genes.BreedingProtocol(results, model.PopulationSize, discoveredBins)
 	}
 
 	return globalBest
+}
+
+func calculateWeightedScore(res model.StrategyResult) float64 {
+	if res.TotalCount == 0 {
+		return 0
+	}
+	successRate := (float64(res.SuccessCount) / float64(res.TotalCount)) * 100.0
+
+	// Penalty Factor:
+	// Complexity is ~1-3 for simple, ~10+ for bloated.
+	// We want to penalize bloated strategies heavily if success rate is comparable.
+	// 0.5% penalty per complexity point.
+	penalty := float64(res.Complexity) * 0.5
+
+	return successRate - penalty
 }
 
 func executeBatch(
@@ -199,6 +277,7 @@ func executeBatch(
 
 	startBatch := time.Now()
 	processedInBatch := 0
+	var processedMu sync.Mutex
 
 	var validGenes []string
 	for _, g := range genesList {
@@ -211,17 +290,27 @@ func executeBatch(
 	}
 
 	totalInBatch := len(validGenes)
-	// Track the actual BEST SCORE seen in this specific run so far to control logging
-	var bestScoreSoFar int32 = int32(currentBest.SuccessCount)
+	// Track best success count locally for this batch to filter log spam
+	var bestSuccessCount int32
+	if currentBest.TotalCount > 0 {
+		bestSuccessCount = int32(currentBest.SuccessCount)
+	}
 
+	stopProgress := make(chan struct{})
 	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
 		for {
-			if processedInBatch >= totalInBatch {
-				break
+			select {
+			case <-stopProgress:
+				return
+			case <-ticker.C:
+				processedMu.Lock()
+				current := processedInBatch
+				processedMu.Unlock()
+				bs := atomic.LoadInt32(&bestSuccessCount)
+				safeProgress(">>> ⏳ Processing: %d/%d (Max Success: %d)", current, totalInBatch, bs)
 			}
-			curBest := atomic.LoadInt32(&bestScoreSoFar)
-			fmt.Printf("\r\033[K>>> ⏳ Processing: %d/%d (High Score: %d)", processedInBatch, totalInBatch, curBest)
-			time.Sleep(500 * time.Millisecond)
 		}
 	}()
 
@@ -246,47 +335,34 @@ func executeBatch(
 				Duration:     dur,
 				WorkerResult: res,
 				SystemLogs:   sysLogs,
+				Complexity:   calculateComplexity(g),
 			}
 
-			// Atomic check and update for logging
-			oldBest := atomic.LoadInt32(&bestScoreSoFar)
-			isNewBest := false
-			isEqualBest := false
-
-			if int32(res.SuccessCount) > oldBest {
-				// Try to swap. If failed, it means someone else updated it, so we are not the strictly new best locally anymore
-				if atomic.CompareAndSwapInt32(&bestScoreSoFar, oldBest, int32(res.SuccessCount)) {
-					isNewBest = true
-				}
-				// Reload to be sure
-				oldBest = atomic.LoadInt32(&bestScoreSoFar)
-			}
-
-			if !isNewBest && int32(res.SuccessCount) == oldBest && oldBest > 0 {
-				isEqualBest = true
-			}
-
-			// Display logic
 			if res.Success {
-				if isNewBest {
-					// Strictly NEW high score
-					fmt.Printf("\r\033[K\033[32;1m🔥 [%.1fs] [%d/%d] %s\033[0m\n", dur.Seconds(), res.SuccessCount, res.TotalCount, g)
-				} else if isEqualBest {
-					// Equal to high score, but not new
-					fmt.Printf("\r\033[K\033[37m⭐ [%.1fs] [%d/%d] %s\033[0m\n", dur.Seconds(), res.SuccessCount, res.TotalCount, g)
+				// LOGGING LOGIC: Only print if this result is strictly BETTER than what we've seen so far.
+				// This prevents spamming the logs with "2/4" if we already know "2/4" exists.
+				// Exception: If currentBest is 0, we accept anything > 0.
+				currentMax := atomic.LoadInt32(&bestSuccessCount)
+				if int32(res.SuccessCount) > currentMax {
+					// Attempt to update the max. Only the winner gets to print.
+					if atomic.CompareAndSwapInt32(&bestSuccessCount, currentMax, int32(res.SuccessCount)) {
+						safePrintf("\033[32;1m🔥 [%.1fs] [%d/%d] C:%d %s\033[0m\n", dur.Seconds(), res.SuccessCount, res.TotalCount, sr.Complexity, g)
+					}
 				}
-				// Don't print if it's worse than current best (reduce noise)
 			}
 
 			resultsCh <- sr
+
+			processedMu.Lock()
 			processedInBatch++
+			processedMu.Unlock()
 		}(gene)
 	}
 
-	go func() {
-		wg.Wait()
-		close(resultsCh)
-	}()
+	wg.Wait()
+	close(stopProgress)
+	close(resultsCh)
+	safePrintf(">>> Batch finished in %.2fs. Processing complete.\n", time.Since(startBatch).Seconds())
 
 	for res := range resultsCh {
 		if res.Success {
@@ -294,13 +370,65 @@ func executeBatch(
 		}
 	}
 
+	// SORTING: Weighted Score DESC
 	sort.Slice(results, func(i, j int) bool {
-		if results[i].SuccessCount != results[j].SuccessCount {
-			return results[i].SuccessCount > results[j].SuccessCount
-		}
-		return results[i].Duration < results[j].Duration
+		s1 := calculateWeightedScore(results[i])
+		s2 := calculateWeightedScore(results[j])
+		return s1 > s2
 	})
 
-	fmt.Printf("\r\033[K>>> Batch finished in %.2fs. Found %d working.\n", time.Since(startBatch).Seconds(), len(results))
+	safePrintf(">>> ✅ Found %d working strategies.\n", len(results))
 	return results, processedInBatch
+}
+
+// calculateComplexity adds a penalty for high repeats and TTLs
+func calculateComplexity(s string) int {
+	score := 0
+	// Base cost for complexity
+	if strings.Contains(s, "fake") {
+		score += 1
+	}
+	if strings.Contains(s, "split") {
+		score += 2
+	}
+
+	// Repeats penalty (Non-Linear)
+	// 1-3: OK
+	// 4-6: Expensive
+	// >6: Very Expensive
+	repeats := 1
+	if i := strings.Index(s, "repeats="); i != -1 {
+		var val int
+		fmt.Sscanf(s[i+8:], "%d", &val)
+		if val > 0 {
+			repeats = val
+		}
+	}
+	if repeats <= 3 {
+		score += repeats
+	} else if repeats <= 6 {
+		score += repeats * 2
+	} else {
+		score += repeats * 4 // Heavy penalty for repeats > 6
+	}
+
+	// TTL penalty
+	ttl := 0
+	if i := strings.Index(s, "ttl="); i != -1 {
+		var val int
+		fmt.Sscanf(s[i+4:], "%d", &val)
+		if val > 0 {
+			ttl = val
+		}
+	}
+	if i := strings.Index(s, "autottl="); i != -1 {
+		var val int
+		fmt.Sscanf(s[i+8:], "%d", &val)
+		if val > 0 {
+			ttl = val
+		}
+	}
+	score += ttl
+
+	return score
 }
