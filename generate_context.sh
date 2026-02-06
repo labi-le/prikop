@@ -32,6 +32,7 @@ get_syntax() {
     local filename="$1"
     case "$filename" in
         *.go) echo "go" ;;
+        *.txt) echo "txt" ;;
         *.yaml|*.yml) echo "yaml" ;;
         *.proto) echo "protobuf" ;;
         *.nix) echo "nix" ;;
@@ -97,6 +98,7 @@ print_files() {
 
     find_cmd+=( -type f \( \
         -name "*.go" -o \
+        -name "*.txt" -o \
         -name "*.yml" -o \
         -name "*.php" -o \
         -name "*.c" -o \
