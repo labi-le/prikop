@@ -62,7 +62,7 @@ func Run(cfg Config) {
 	}
 	fmt.Printf("Recon Report: %+v\n", report)
 
-	discoveredBins, err := container.DiscoverBinFiles(ctx, cli, cfg.FakePath)
+	discoveredBins, err := container.DiscoverBinFiles(cfg.FakePath)
 	if err != nil {
 		if ctx.Err() != nil {
 			return

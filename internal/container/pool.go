@@ -25,7 +25,7 @@ type WorkerPool struct {
 	size        int
 	workers     chan *Worker
 	containers  []string
-	socketPaths []string // Track created sockets for cleanup
+	socketPaths []string
 	mu          sync.Mutex
 	hostSockDir string
 }
@@ -53,7 +53,7 @@ func (p *WorkerPool) Start() error {
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, p.size)
-
+	// Semaphore to limit concurrent container creation API calls (avoid flooding docker daemon)
 	sem := make(chan struct{}, 10)
 
 	for i := 0; i < p.size; i++ {
@@ -75,7 +75,7 @@ func (p *WorkerPool) Start() error {
 			p.socketPaths = append(p.socketPaths, sockPathOrchestrator)
 			p.mu.Unlock()
 
-			// Cleanup potential stale socket before starting
+			// Cleanup potential stale socket/container
 			_ = os.Remove(sockPathOrchestrator)
 			_, _ = p.cli.ContainerRemove(p.ctx, workerName, client.ContainerRemoveOptions{Force: true})
 
@@ -137,12 +137,21 @@ func (p *WorkerPool) Start() error {
 }
 
 func (p *WorkerPool) waitForSocket(path string, containerID string) error {
-	for i := 0; i < 300; i++ {
-		if _, err := os.Stat(path); err == nil {
-			return nil
-		}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
 
-		if i%10 == 0 {
+	timeout := time.After(30 * time.Second)
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("socket %s not created (timeout)", path)
+		case <-ticker.C:
+			if _, err := os.Stat(path); err == nil {
+				return nil
+			}
+
+			// Check if container died
 			insp, err := p.cli.ContainerInspect(p.ctx, containerID, client.ContainerInspectOptions{})
 			if err == nil && !insp.Container.State.Running {
 				logs, _ := p.cli.ContainerLogs(p.ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
@@ -151,11 +160,7 @@ func (p *WorkerPool) waitForSocket(path string, containerID string) error {
 				return fmt.Errorf("worker died early (ExitCode: %d). Logs: %s", insp.Container.State.ExitCode, buf.String())
 			}
 		}
-
-		time.Sleep(100 * time.Millisecond)
 	}
-
-	return fmt.Errorf("socket %s not created (timeout)", path)
 }
 
 func (p *WorkerPool) Stop() {
@@ -171,6 +176,7 @@ func (p *WorkerPool) Stop() {
 			defer wg.Done()
 			tCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
+			// Ignore errors on removal
 			_, _ = p.cli.ContainerRemove(tCtx, id, client.ContainerRemoveOptions{Force: true})
 		}(cid)
 	}
