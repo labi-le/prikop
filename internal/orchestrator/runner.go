@@ -62,7 +62,7 @@ func Run(cfg Config) {
 	}
 	fmt.Printf("Recon Report: %+v\n", report)
 
-	discoveredBins, err := container.DiscoverBinFiles(ctx, cli, cfg.FakePath)
+	discoveredBins, err := container.DiscoverBinFiles(cfg.FakePath)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -82,7 +82,7 @@ func definePhases(targetsPath string) []Phase {
 		{
 			Name:    "GENERAL TCP (TCP 16-20 Checker)",
 			Group:   "general",
-			Gens:    8,
+			Gens:    20,
 			Filters: "--filter-tcp=80,443",
 		},
 		{
@@ -134,7 +134,7 @@ func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []s
 		}
 
 		if best != nil {
-			strategyArgs := best.Config.ToArgs()
+			strategyArgs := best.Config.String()
 			fmt.Printf(">>> WINNER: %s\n", strategyArgs)
 			block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
 			finalConfigs = append(finalConfigs, block)

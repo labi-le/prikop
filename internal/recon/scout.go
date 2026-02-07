@@ -3,6 +3,7 @@ package recon
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"prikop/internal/container"
 	"prikop/internal/model"
@@ -18,7 +19,7 @@ func RunScout(ctx context.Context, pool *container.WorkerPool, group string) mod
 	fmt.Print("    [?] Probing Fragmentation (ipfrag1)... ")
 
 	fragReq := model.WorkerRequest{
-		StrategyArgs: "--dpi-desync=ipfrag1 --dpi-desync-repeats=2",
+		StrategyArgs: strings.Fields("--dpi-desync=ipfrag1 --dpi-desync-repeats=2"),
 		TargetGroup:  group,
 	}
 
@@ -39,7 +40,7 @@ func RunScout(ctx context.Context, pool *container.WorkerPool, group string) mod
 	fmt.Print("    [?] Probing BadSum (fake+badsum)... ")
 
 	badsumReq := model.WorkerRequest{
-		StrategyArgs: "--dpi-desync=fake --dpi-desync-fooling=badsum",
+		StrategyArgs: strings.Fields("--dpi-desync=fake --dpi-desync-fooling=badsum"),
 		TargetGroup:  group,
 	}
 

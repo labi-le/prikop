@@ -11,9 +11,10 @@ import (
 // SetupIptables applies rules based on target group
 func SetupIptables(group string) error {
 	// Flush previous rules
-	exec.Command("iptables", "-F", "OUTPUT").Run()
+	_ = exec.Command("iptables", "-F", "OUTPUT").Run()
 
-	// Logic preserved: Universal catch-all rules
+	// Direct execution implies waiting, no need to handle output/error elaborately for flush
+	// Universal catch-all rules
 	// TCP
 	argsTCP := []string{"-I", "OUTPUT", "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "NFQUEUE", "--queue-num", model.QueueNum, "--queue-bypass"}
 	if out, err := exec.Command("iptables", argsTCP...).CombinedOutput(); err != nil {
@@ -29,18 +30,22 @@ func SetupIptables(group string) error {
 
 // Cleanup removes processes and flushes firewall
 func Cleanup() {
-	exec.Command("pkill", "-9", "nfqws").Run()
-	exec.Command("iptables", "-F", "OUTPUT").Run()
-	exec.Command("iptables", "-F", "INPUT").Run()
+	_ = exec.Command("pkill", "-9", "nfqws").Run()
+	_ = exec.Command("iptables", "-F", "OUTPUT").Run()
+	_ = exec.Command("iptables", "-F", "INPUT").Run()
 }
 
-// StartNFQWS executes the nfqws binary
-func StartNFQWS(args string) (*exec.Cmd, *bytes.Buffer) {
-	fullCmd := fmt.Sprintf("/usr/bin/nfqws --qnum=%s %s", model.QueueNum, args)
-	cmd := exec.Command("sh", "-c", fullCmd)
+// StartNFQWS executes the nfqws binary directly
+func StartNFQWS(args []string) (*exec.Cmd, *bytes.Buffer) {
+	// Prepend strict args
+	finalArgs := append([]string{"--qnum=" + model.QueueNum}, args...)
+
+	cmd := exec.Command("/usr/bin/nfqws", finalArgs...)
+
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
+	// Setpgid creates a new process group, useful for killing the whole tree if needed
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
@@ -52,7 +57,9 @@ func StartNFQWS(args string) (*exec.Cmd, *bytes.Buffer) {
 // KillCmd force kills the process
 func KillCmd(cmd *exec.Cmd) {
 	if cmd != nil && cmd.Process != nil {
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		cmd.Wait()
+		// Ignore error if process already dead
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		// Wait releases resources (zombies)
+		_ = cmd.Wait()
 	}
 }

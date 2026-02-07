@@ -17,13 +17,13 @@ const (
 
 // WorkerRequest отправляется оркестратором воркеру
 type WorkerRequest struct {
-	StrategyArgs string `json:"strategy_args"`
-	TargetGroup  string `json:"target_group"`
+	StrategyArgs []string `json:"strategy_args"`
+	TargetGroup  string   `json:"target_group"`
 }
 
 // StrategyConfig — это интерфейс, который должна реализовать стратегия NFQWS
 type StrategyConfig interface {
-	ToArgs() string
+	ToArgs() []string
 	String() string
 }
 

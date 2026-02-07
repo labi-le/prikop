@@ -132,10 +132,10 @@ type TcpFlagsOptions struct {
 }
 
 func (s Strategy) String() string {
-	return s.ToArgs()
+	return strings.Join(s.ToArgs(), " ")
 }
 
-func (s Strategy) ToArgs() string {
+func (s Strategy) ToArgs() []string {
 	var args []string
 	args = append(args, s.argsMain()...)
 	args = append(args, s.argsFooling()...)
@@ -149,7 +149,7 @@ func (s Strategy) ToArgs() string {
 	args = append(args, s.argsDup()...)
 	args = append(args, s.argsOrig()...)
 
-	return strings.Join(args, " ")
+	return args
 }
 
 func (s Strategy) argsMain() []string {

@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"os"
+	"os/signal"
 	"prikop/internal/orchestrator"
 	"prikop/internal/worker"
+	"syscall"
 )
 
 func main() {
@@ -15,8 +19,11 @@ func main() {
 
 	flag.Parse()
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	if *workerSocket != "" {
-		worker.RunWorkerServer(*workerSocket)
+		worker.RunWorkerServer(ctx, *workerSocket)
 	} else {
 		orchestrator.Run(cfg)
 	}

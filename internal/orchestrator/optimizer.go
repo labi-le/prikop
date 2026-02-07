@@ -55,7 +55,7 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 
 			if globalBest == nil || score > evolution.CalculateScore(globalBest.Result, globalBest.Complexity) {
 				globalBest = &bestGen
-				fmt.Printf(">>> NEW BEST: %s (Success: %d/%d)\n", globalBest.Config.ToArgs(), globalBest.Result.SuccessCount, globalBest.Result.TotalCount)
+				fmt.Printf(">>> NEW BEST: %s (Success: %d/%d)\n", globalBest.Config.String(), globalBest.Result.SuccessCount, globalBest.Result.TotalCount)
 				o.logResultDetails(globalBest)
 			}
 		}
@@ -108,7 +108,7 @@ func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, g
 			duration := time.Since(start)
 			scored := model.ScoredStrategy{
 				Config:     strat,
-				RawArgs:    strat.ToArgs(),
+				RawArgs:    strat.String(),
 				Duration:   duration,
 				Result:     res,
 				Complexity: strat.Repeats,

@@ -15,27 +15,21 @@ import (
 	"github.com/quic-go/quic-go/http3"
 )
 
-// ExecuteChecks runs parallel checks against the provided targets.
-// This consolidates logic previously scattered or duplicated.
+const (
+	HardTimeout = 5 * time.Second
+	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
 func ExecuteChecks(ctx context.Context, targets []Target) CheckResult {
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var passed []string
-	var failed []string
-
-	// HTML Checker Logic: "TIMEOUT_MS = 5000"
-	const HardTimeout = 5 * time.Second
-	const UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-	// Transports with InsecureSkipVerify (DPI bypass check, not security check)
 	tcpTransport := &http.Transport{
 		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-		DisableKeepAlives:     true,
+		DisableKeepAlives:     true, // Force new connection for each check to trigger DPI
 		TLSHandshakeTimeout:   HardTimeout,
 		ResponseHeaderTimeout: HardTimeout,
 		DialContext: (&net.Dialer{
 			Timeout: HardTimeout,
 		}).DialContext,
+		ForceAttemptHTTP2: true,
 	}
 
 	quicTransport := &http3.Transport{
@@ -44,6 +38,11 @@ func ExecuteChecks(ctx context.Context, targets []Target) CheckResult {
 
 	tcpClient := &http.Client{Timeout: HardTimeout, Transport: tcpTransport}
 	quicClient := &http.Client{Timeout: HardTimeout, Transport: quicTransport}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var passed []string
+	var failed []string
 
 	for _, t := range targets {
 		wg.Add(1)
@@ -69,13 +68,14 @@ func ExecuteChecks(ctx context.Context, targets []Target) CheckResult {
 				return
 			}
 
-			reqCtx, cancel := context.WithTimeout(ctx, HardTimeout)
-			defer cancel()
-
+			// Select client
 			cli := tcpClient
 			if tgt.Proto == "quic" {
 				cli = quicClient
 			}
+
+			reqCtx, cancel := context.WithTimeout(ctx, HardTimeout)
+			defer cancel()
 
 			req, err := http.NewRequestWithContext(reqCtx, "GET", tgt.URL, nil)
 			if err != nil {
@@ -94,6 +94,7 @@ func ExecuteChecks(ctx context.Context, targets []Target) CheckResult {
 				return
 			}
 
+			// Efficient body read without full allocation if threshold is small
 			buf := make([]byte, 4096)
 			readTotal := 0
 
@@ -131,8 +132,8 @@ func checkSTUN(ctx context.Context, address string) bool {
 	address = strings.TrimPrefix(address, "https://")
 	address = strings.TrimPrefix(address, "http://")
 
-	dialer := net.Dialer{Timeout: 3 * time.Second}
-	conn, err := dialer.DialContext(ctx, "udp", address)
+	d := net.Dialer{Timeout: 3 * time.Second}
+	conn, err := d.DialContext(ctx, "udp", address)
 	if err != nil {
 		return false
 	}

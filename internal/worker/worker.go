@@ -12,7 +12,7 @@ import (
 )
 
 // RunWorkerServer starts the worker in listening mode
-func RunWorkerServer(socketPath string) {
+func RunWorkerServer(ctx context.Context, socketPath string) {
 	_ = os.Remove(socketPath)
 
 	listener, err := net.Listen("unix", socketPath)
@@ -23,13 +23,20 @@ func RunWorkerServer(socketPath string) {
 	if err := os.Chmod(socketPath, 0777); err != nil {
 		fmt.Fprintf(os.Stderr, "chmod warning: %v\n", err)
 	}
-	defer listener.Close()
 
 	fmt.Printf("Worker listening on %s\n", socketPath)
+
+	go func() {
+		<-ctx.Done()
+		listener.Close()
+	}()
 
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return // Graceful shutdown
+			}
 			fmt.Fprintf(os.Stderr, "accept error: %v\n", err)
 			continue
 		}
