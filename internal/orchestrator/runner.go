@@ -46,6 +46,12 @@ func Run(cfg Config) {
 
 	phases := []Phase{
 		{
+			Name:    "GENERAL TCP (TCP 16-20 Checker)",
+			Group:   "general",
+			Gens:    10,
+			Filters: "--filter-tcp=80,443",
+		},
+		{
 			Name:    "GOOGLE TCP",
 			Group:   "google_tcp",
 			Gens:    10,
@@ -74,12 +80,6 @@ func Run(cfg Config) {
 			Group:   "discord_l7",
 			Gens:    10,
 			Filters: fmt.Sprintf("--filter-udp=19294-19344 --filter-l7=discord,stun --hostlist=%s/discord.txt", cfg.TargetsPath),
-		},
-		{
-			Name:    "GENERAL TCP (TCP 16-20 Checker)",
-			Group:   "general",
-			Gens:    10,
-			Filters: "--filter-tcp=80,443",
 		},
 	}
 

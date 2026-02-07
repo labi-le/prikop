@@ -87,6 +87,8 @@ func (v *GeneralVerifier) Run(ctx context.Context) CheckResult {
 		{URL: "https://www.velivole.fr/img/header.jpg", Threshold: Threshold, IgnoreStatus: true},
 		// US.CNST-01
 		{URL: "https://cdn.xuansiwei.com/common/lib/font-awesome/4.7.0/fontawesome-webfont.woff2?v=4.7.0", Threshold: Threshold, IgnoreStatus: true},
+
+		{URL: "https://scontent-cdg4-2.cdninstagram.com", Threshold: Threshold, IgnoreStatus: true},
 	}
 	return runParallelChecks(ctx, targets)
 }
