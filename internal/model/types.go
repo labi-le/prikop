@@ -39,3 +39,9 @@ type ScoredStrategy struct {
 	SystemLogs string
 	Complexity int
 }
+
+// ReconReport holds the results of the active reconnaissance phase
+type ReconReport struct {
+	IPFragWorks bool
+	BadSumWorks bool
+}

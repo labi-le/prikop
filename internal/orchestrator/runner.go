@@ -4,15 +4,17 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
 	"prikop/internal/container"
 	"prikop/internal/evolution"
 	"prikop/internal/galaxy"
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
-	"sort"
-	"strings"
-	"sync"
-	"time"
+	"prikop/internal/recon"
 
 	"github.com/moby/moby/client"
 )
@@ -63,12 +65,6 @@ func Run(cfg Config) {
 			Gens:    10,
 			Filters: fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", cfg.TargetsPath),
 		},
-		//{
-		//	Name:    "DISCORD TCP",
-		//	Group:   "discord_tcp",
-		//	Gens:    50,
-		//	Filters: fmt.Sprintf("--filter-tcp=80,443,2053,2083,2087,2096,8443 --hostlist=%s/discord.txt", cfg.TargetsPath),
-		//},
 		{
 			Name:    "DISCORD UDP (Voice)",
 			Group:   "discord_udp",
@@ -121,9 +117,13 @@ func printFinalConfig(configs []string) {
 }
 
 func runPhase(ctx context.Context, cli *client.Client, group string, bins []string, maxGens int) *model.ScoredStrategy {
+	// 0. Active Reconnaissance (New Step)
+	reconReport := recon.RunScout(ctx, cli, group)
+
 	var population []nfqws.Strategy
 
-	population = galaxy.GenerateZeroGeneration(bins)
+	// Inject Recon Report into Sniper
+	population = galaxy.GenerateZeroGeneration(bins, reconReport)
 
 	var globalBest *model.ScoredStrategy
 

@@ -2,14 +2,15 @@ package evolution
 
 import (
 	"math/rand"
-	"prikop/internal/model"
-	"prikop/internal/nfqws"
 	"sort"
 	"time"
+
+	"prikop/internal/model"
+	"prikop/internal/nfqws"
 )
 
 const (
-	PopulationSize = 200
+	PopulationSize = 100
 	ElitesCount    = 50
 )
 
