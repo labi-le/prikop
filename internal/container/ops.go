@@ -37,7 +37,10 @@ func DiscoverBinFiles(ctx context.Context, cli *client.Client, fakePath string) 
 	case <-statusCh.Result:
 	}
 
-	out, _ := cli.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true})
+	out, err := cli.ContainerLogs(ctx, resp.ID, client.ContainerLogsOptions{ShowStdout: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get logs: %w", err)
+	}
 	defer out.Close()
 
 	var buf bytes.Buffer
@@ -80,7 +83,10 @@ func RunContainerTest(ctx context.Context, cli *client.Client, args string, targ
 		return model.WorkerResult{Error: "Timeout"}, ""
 	}
 
-	out, _ := cli.ContainerLogs(ctx, createResp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	out, err := cli.ContainerLogs(ctx, createResp.ID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+	if err != nil {
+		return model.WorkerResult{Error: "Docker Logs Error: " + err.Error()}, ""
+	}
 	defer out.Close()
 
 	var stdout, stderr bytes.Buffer

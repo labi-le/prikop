@@ -33,6 +33,17 @@ func (v *GeneralVerifier) Run(ctx context.Context) CheckResult {
 		{URL: "https://api.frankfurter.dev/v1/2000-01-01..2002-12-31", Threshold: Threshold, IgnoreStatus: true},
 		// US.CF-04
 		{URL: "https://www.bigcartel.com/", Threshold: Threshold, IgnoreStatus: true},
+
+		// US.CF-02
+		{URL: "https://genshin.jmp.blue/characters/all#", Threshold: Threshold, IgnoreStatus: true},
+		// US.CF-03
+		{URL: "https://api.frankfurter.dev/v1/2000-01-01..2002-12-31", Threshold: Threshold, IgnoreStatus: true},
+
+		// US.CF-02
+		{URL: "https://genshin.jmp.blue/characters/all#", Threshold: Threshold, IgnoreStatus: true},
+		// US.CF-03
+		{URL: "https://api.frankfurter.dev/v1/2000-01-01..2002-12-31", Threshold: Threshold, IgnoreStatus: true},
+
 		// US.DO-01 (times: 2)
 		{URL: "https://genderize.io/", Threshold: Threshold, IgnoreStatus: true},
 		{URL: "https://genderize.io/", Threshold: Threshold, IgnoreStatus: true},
