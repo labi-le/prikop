@@ -7,4 +7,4 @@ build:
 	docker build -t prikop:latest .
 
 context:
-	./generate_context.sh . -e .idea > context.md
+	./generate_context.sh . -e targets -e '*_test.go' -e go.sum -s ../moby/client > context.md
