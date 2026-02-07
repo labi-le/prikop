@@ -1,6 +1,7 @@
 package evolution
 
 import (
+	"fmt"
 	"math/rand"
 	"sort"
 
@@ -10,84 +11,97 @@ import (
 
 const (
 	PopulationSize = 100
-	ElitesCount    = 50
 )
 
-// Evolve принимает результаты прошлого поколения и возвращает новое строго фиксированного размера
+// Evolve принимает результаты прошлого поколения и возвращает новое.
+// Использует Tournament Selection с кластеризацией для сохранения разнообразия.
 func Evolve(results []model.ScoredStrategy, discoveredBins []string) []nfqws.Strategy {
 	var nextGen []nfqws.Strategy
 	mutator := NewMutator(discoveredBins)
 
-	// 1. Сортировка (на всякий случай, если оркестратор не отсортировал)
-	sort.Slice(results, func(i, j int) bool {
-		return CalculateScore(results[i].Result, results[i].Complexity) >
-			CalculateScore(results[j].Result, results[j].Complexity)
-	})
+	clusters := make(map[string][]model.ScoredStrategy)
 
-	// 2. Elitism: Сохраняем лучших без изменений
-	for i := 0; i < len(results) && i < ElitesCount; i++ {
-		if s, ok := results[i].Config.(nfqws.Strategy); ok {
-			nextGen = append(nextGen, s)
-		}
-	}
-
-	// 3. Adaptive Mutation: Мутируем лучших
-	// Берем топ-10 (или меньше) для мутаций
-	breedPoolSize := 10
-	if len(results) < breedPoolSize {
-		breedPoolSize = len(results)
-	}
-
-	for i := 0; i < breedPoolSize; i++ {
-		parent, ok := results[i].Config.(nfqws.Strategy)
+	for _, r := range results {
+		strat, ok := r.Config.(nfqws.Strategy)
 		if !ok {
 			continue
 		}
-		// Создаем мутантов пока есть место, но не более 3 на родителя
-		for k := 0; k < 3; k++ {
-			child := parent
-			mutator.Mutate(&child)
-			nextGen = append(nextGen, child)
+		key := strat.Mode
+		if strat.Mode == "fake" {
+			// Различаем fake-tls и fake-quic
+			if strat.Fake.Quic != "" {
+				key += "-quic"
+			} else {
+				key += "-tls"
+			}
+		} else {
+			key += "-" + strat.Split.Pos
+		}
+		clusters[key] = append(clusters[key], r)
+	}
+
+	fmt.Printf("    [i] Diversity: %d unique architectures survived.\n", len(clusters))
+
+	var bestParents []model.ScoredStrategy
+
+	for _, cluster := range clusters {
+		sort.Slice(cluster, func(i, j int) bool {
+			return CalculateScore(cluster[i].Result, cluster[i].Complexity) >
+				CalculateScore(cluster[j].Result, cluster[j].Complexity)
+		})
+
+		// Берем топ-1, это Элита кластера
+		bestParents = append(bestParents, cluster[0])
+
+		// Сохраняем элиту в новое поколение без изменений
+		if s, ok := cluster[0].Config.(nfqws.Strategy); ok {
+			nextGen = append(nextGen, s)
+		}
+
+		// Если кластер большой и успешный, берем еще пару родителей
+		if len(cluster) > 3 && cluster[0].Result.SuccessCount > 0 {
+			bestParents = append(bestParents, cluster[1], cluster[2])
 		}
 	}
 
-	// 4. Crossover: Скрещивание
-	if len(results) >= 2 {
-		for i := 0; i < 10; i++ {
-			idx1 := rand.Intn(breedPoolSize)
-			idx2 := rand.Intn(breedPoolSize)
+	// 3. Breeding with Feedback
+	// Заполняем популяцию мутантами от лучших родителей
+	slotsRemaining := PopulationSize - len(nextGen)
 
-			p1, ok1 := results[idx1].Config.(nfqws.Strategy)
-			p2, ok2 := results[idx2].Config.(nfqws.Strategy)
+	// Если родителей слишком мало, добиваем Fresh Blood позже
+	if len(bestParents) > 0 {
+		for i := 0; i < slotsRemaining; i++ {
+			// Roulette Wheel selection among best parents could be better,
+			// but Random pick is fine for now given we pre-filtered bestParents
+			parent := bestParents[rand.Intn(len(bestParents))]
 
-			if ok1 && ok2 {
-				child := p1
-				// Скрещиваем параметры Fake и TTL
-				child.Fake = p2.Fake
-				child.TTL = p2.TTL
-				// Шанс мутации ребенка
-				if rand.Float64() < 0.3 {
-					mutator.Mutate(&child)
-				}
+			if s, ok := parent.Config.(nfqws.Strategy); ok {
+				child := s
+
+				// CRITICAL: Используем причину сбоя родителя для направленной мутации
+				// Если родитель был успешен частично (SuccessCount > 0), FailureType может быть пустым.
+				// В таком случае SmartMutate сделает "fine tuning".
+				mutator.SmartMutate(&child, parent.Result.FailureType)
+
 				nextGen = append(nextGen, child)
 			}
 		}
 	}
 
-	// 5. Population Control: Truncate or Fill
-	// Если перебор - обрезаем
-	if len(nextGen) > PopulationSize {
-		nextGen = nextGen[:PopulationSize]
-	}
-
-	// Если недобор - заполняем случайными стратегиями (Fresh Blood)
+	// 4. Emergency Fill (Fresh Blood)
+	// Если стратегий все еще мало (или все родители умерли)
 	for len(nextGen) < PopulationSize {
 		newStrat := nfqws.Strategy{
 			Mode:    "fake",
-			Repeats: 1 + rand.Intn(5),
+			Repeats: 1 + rand.Intn(4),
 		}
-		mutator.Mutate(&newStrat) // Полная рандомизация
+		mutator.Mutate(&newStrat) // Полный рандом
 		nextGen = append(nextGen, newStrat)
+	}
+
+	// Обрезка на всякий случай
+	if len(nextGen) > PopulationSize {
+		nextGen = nextGen[:PopulationSize]
 	}
 
 	return nextGen
@@ -97,11 +111,16 @@ func CalculateScore(res model.WorkerResult, complexity int) float64 {
 	if res.TotalCount == 0 {
 		return 0
 	}
-	// Приоритет: SuccessRate > Code 200 > Low Complexity
+
 	successRate := (float64(res.SuccessCount) / float64(res.TotalCount)) * 100.0
 
-	// Штраф за сложность (repeats) минимален, но важен при равных успехах
-	penalty := float64(complexity) * 0.1
+	// Огромный бонус за 100% успех
+	if res.SuccessCount == res.TotalCount {
+		successRate += 50.0
+	}
+
+	// Штраф за сложность (repeats)
+	penalty := float64(complexity) * 2.0 // Увеличили штраф, чтобы при прочих равных выбирал меньше repeats
 
 	return successRate - penalty
 }

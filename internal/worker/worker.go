@@ -91,6 +91,7 @@ func executeTest(req model.WorkerRequest) model.WorkerResult {
 
 	return model.WorkerResult{
 		Success:      checkRes.Success,
+		FailureType:  checkRes.FailureReason,
 		SuccessCount: checkRes.SuccessCount,
 		TotalCount:   checkRes.TotalCount,
 		Passed:       checkRes.PassedUrls,

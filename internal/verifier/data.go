@@ -30,4 +30,5 @@ var GeneralTargets = []Target{
 	{URL: "https://cdn.xuansiwei.com/common/lib/font-awesome/4.7.0/fontawesome-webfont.woff2?v=4.7.0", Threshold: DefaultThreshold, IgnoreStatus: true},
 	{URL: "https://scontent-cdg4-2.cdninstagram.com", Threshold: DefaultThreshold, IgnoreStatus: true},
 	{URL: "https://windscribe.com/_next/image?url=%2Fimages%2Fhomepage%2Fbest-free-vpn%2Fstars.png&w=1920&q=100", Threshold: DefaultThreshold, IgnoreStatus: true},
+	{URL: "https://static.dw.com/image/75709816_601.jpg", Threshold: DefaultThreshold, IgnoreStatus: false},
 }

@@ -29,13 +29,13 @@ type StrategyConfig interface {
 
 // WorkerResult — результат работы контейнера (JSON output)
 type WorkerResult struct {
-	Success      bool     `json:"success"`
-	Code         int      `json:"code"`
-	Error        string   `json:"error,omitempty"`
-	SuccessCount int      `json:"success_count"`
-	TotalCount   int      `json:"total_count"`
-	Passed       []string `json:"passed,omitempty"`
-	Failed       []string `json:"failed,omitempty"`
+	Success      bool          `json:"success"`
+	FailureType  FailureReason `json:"failure_type"` // NEW field
+	Error        string        `json:"error,omitempty"`
+	SuccessCount int           `json:"success_count"`
+	TotalCount   int           `json:"total_count"`
+	Passed       []string      `json:"passed,omitempty"`
+	Failed       []string      `json:"failed,omitempty"`
 }
 
 // ScoredStrategy — стратегия с метриками для эволюции
@@ -53,3 +53,12 @@ type ReconReport struct {
 	IPFragWorks bool
 	BadSumWorks bool
 }
+
+type FailureReason string
+
+const (
+	ReasonNone    FailureReason = ""
+	ReasonTimeout FailureReason = "timeout" // DPI Drop or Blackhole
+	ReasonReset   FailureReason = "reset"   // DPI Active Reject
+	ReasonUnknown FailureReason = "unknown"
+)

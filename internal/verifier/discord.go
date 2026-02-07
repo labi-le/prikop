@@ -24,7 +24,7 @@ func (v *DiscordVerifier) Run(ctx context.Context) CheckResult {
 	if v.Mode == "discord_udp" {
 		targets = []Target{
 			{URL: "https://discord.com", Threshold: 1000, Proto: "quic"},
-			{URL: "https://canary.discord.com", Threshold: 1000, Proto: "quic"},
+			{URL: "https://gateway.discord.gg", Threshold: 1000, Proto: "quic"},
 		}
 	}
 
