@@ -50,31 +50,31 @@ func Run(cfg Config) {
 		{
 			Name:    "GENERAL TCP (TCP 16-20 Checker)",
 			Group:   "general",
-			Gens:    10,
+			Gens:    8,
 			Filters: "--filter-tcp=80,443",
 		},
 		{
 			Name:    "GOOGLE TCP",
 			Group:   "google_tcp",
-			Gens:    10,
+			Gens:    5,
 			Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", cfg.TargetsPath),
 		},
 		{
 			Name:    "GOOGLE UDP (QUIC)",
 			Group:   "google_udp",
-			Gens:    10,
+			Gens:    5,
 			Filters: fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", cfg.TargetsPath),
 		},
 		{
 			Name:    "DISCORD UDP (Voice)",
 			Group:   "discord_udp",
-			Gens:    10,
+			Gens:    5,
 			Filters: fmt.Sprintf("--filter-udp=50000-65535,443 --hostlist=%s/discord.txt", cfg.TargetsPath),
 		},
 		{
 			Name:    "DISCORD UDP (STUN)",
 			Group:   "discord_l7",
-			Gens:    10,
+			Gens:    5,
 			Filters: fmt.Sprintf("--filter-udp=19294-19344 --filter-l7=discord,stun --hostlist=%s/discord.txt", cfg.TargetsPath),
 		},
 	}
