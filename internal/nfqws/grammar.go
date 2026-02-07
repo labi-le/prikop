@@ -7,7 +7,7 @@ import (
 
 // Strategy describes the nfqws arguments genome
 type Strategy struct {
-	Mode        string // --dpi-desync (comma separated list allowed)
+	Mode        string // --dpi-desync
 	Repeats     int    // --dpi-desync-repeats
 	AnyProtocol bool   // --dpi-desync-any-protocol
 	SkipNoSNI   bool   // --dpi-desync-skip-nosni
@@ -35,100 +35,100 @@ type FoolingSet struct {
 	Datanoack       bool
 	HopByHop        bool
 	HopByHop2       bool
-	BadSeqIncrement int // --dpi-desync-badseq-increment
-	BadAckIncrement int // --dpi-desync-badack-increment
-	TsIncrement     int // --dpi-desync-ts-increment
+	BadSeqIncrement int
+	BadAckIncrement int
+	TsIncrement     int
 }
 
 type FakeOptions struct {
-	TLS        string // --dpi-desync-fake-tls
-	Quic       string // --dpi-desync-fake-quic
-	Http       string // --dpi-desync-fake-http
-	Wireguard  string // --dpi-desync-fake-wireguard
-	Dht        string // --dpi-desync-fake-dht
-	Discord    string // --dpi-desync-fake-discord
-	Stun       string // --dpi-desync-fake-stun
-	UnknownUdp string // --dpi-desync-fake-unknown-udp
-	Unknown    string // --dpi-desync-fake-unknown
-	SynData    string // --dpi-desync-fake-syndata
-	TlsMod     string // --dpi-desync-fake-tls-mod
-	TcpMod     string // --dpi-desync-fake-tcp-mod
+	TLS        string
+	Quic       string
+	Http       string
+	Wireguard  string
+	Dht        string
+	Discord    string
+	Stun       string
+	UnknownUdp string
+	Unknown    string
+	SynData    string
+	TlsMod     string
+	TcpMod     string
 }
 
 type SplitOptions struct {
-	Pos          string // --dpi-desync-split-pos
-	SeqOvl       int    // --dpi-desync-split-seqovl
-	Pattern      string // --dpi-desync-split-seqovl-pattern
-	FakedPattern string // --dpi-desync-fakedsplit-pattern
-	FakedMod     string // --dpi-desync-fakedsplit-mod
-	HostMid      string // --dpi-desync-hostfakesplit-midhost
-	HostMod      string // --dpi-desync-hostfakesplit-mod
-	IpFragPosTcp int    // --dpi-desync-ipfrag-pos-tcp
-	IpFragPosUdp int    // --dpi-desync-ipfrag-pos-udp
+	Pos          string
+	SeqOvl       int
+	Pattern      string
+	FakedPattern string
+	FakedMod     string
+	HostMid      string
+	HostMod      string
+	IpFragPosTcp int
+	IpFragPosUdp int
 }
 
 type UdpLenOptions struct {
-	Increment int    // --dpi-desync-udplen-increment
-	Pattern   string // --dpi-desync-udplen-pattern
+	Increment int
+	Pattern   string
 }
 
 type TTLOptions struct {
-	Fixed   int    // --dpi-desync-ttl
-	Fixed6  int    // --dpi-desync-ttl6
-	Auto    int    // --dpi-desync-autottl
-	Auto6   int    // --dpi-desync-autottl6
-	AutoStr string // Raw string for autottl (e.g. "5:3-64") if complex format needed
+	Fixed   int
+	Fixed6  int
+	Auto    int
+	Auto6   int
+	AutoStr string
 }
 
 type WSSOptions struct {
 	Enabled      bool
-	Value        string // --wssize
-	Cutoff       string // --wssize-cutoff
-	ForcedCutoff bool   // --wssize-forced-cutoff
+	Value        string
+	Cutoff       string
+	ForcedCutoff bool
 }
 
 type TamperOptions struct {
-	HostCase    bool   // --hostcase
-	HostSpell   string // --hostspell
-	HostNoSpace bool   // --hostnospace
-	DomCase     bool   // --domcase
-	MethodEol   bool   // --methodeol
-	IpId        string // --ip-id
-	SynAckSplit string // --synack-split
+	HostCase    bool
+	HostSpell   string
+	HostNoSpace bool
+	DomCase     bool
+	MethodEol   bool
+	IpId        string
+	SynAckSplit string
 }
 
 type DupOptions struct {
-	Count           int    // --dup
-	Replace         bool   // --dup-replace
-	TTL             int    // --dup-ttl
-	TTL6            int    // --dup-ttl6
-	AutoTTL         string // --dup-autottl
-	AutoTTL6        string // --dup-autottl6
-	Fooling         string // --dup-fooling
-	TsIncrement     int    // --dup-ts-increment
-	BadSeqIncrement int    // --dup-badseq-increment
-	BadAckIncrement int    // --dup-badack-increment
-	IpId            string // --dup-ip-id
-	Start           string // --dup-start
-	Cutoff          string // --dup-cutoff
-	TcpFlagsSet     string // --dup-tcp-flags-set
-	TcpFlagsUnset   string // --dup-tcp-flags-unset
+	Count           int
+	Replace         bool
+	TTL             int
+	TTL6            int
+	AutoTTL         string
+	AutoTTL6        string
+	Fooling         string
+	TsIncrement     int
+	BadSeqIncrement int
+	BadAckIncrement int
+	IpId            string
+	Start           string
+	Cutoff          string
+	TcpFlagsSet     string
+	TcpFlagsUnset   string
 }
 
 type OrigOptions struct {
-	TTL           int    // --orig-ttl
-	TTL6          int    // --orig-ttl6
-	AutoTTL       string // --orig-autottl
-	AutoTTL6      string // --orig-autottl6
-	TcpFlagsSet   string // --orig-tcp-flags-set
-	TcpFlagsUnset string // --orig-tcp-flags-unset
-	ModStart      string // --orig-mod-start
-	ModCutoff     string // --orig-mod-cutoff
+	TTL           int
+	TTL6          int
+	AutoTTL       string
+	AutoTTL6      string
+	TcpFlagsSet   string
+	TcpFlagsUnset string
+	ModStart      string
+	ModCutoff     string
 }
 
 type TcpFlagsOptions struct {
-	Set   string // --dpi-desync-tcp-flags-set
-	Unset string // --dpi-desync-tcp-flags-unset
+	Set   string
+	Unset string
 }
 
 func (s Strategy) String() string {
@@ -137,8 +137,23 @@ func (s Strategy) String() string {
 
 func (s Strategy) ToArgs() string {
 	var args []string
+	args = append(args, s.argsMain()...)
+	args = append(args, s.argsFooling()...)
+	args = append(args, s.argsFake()...)
+	args = append(args, s.argsSplit()...)
+	args = append(args, s.argsUdpLen()...)
+	args = append(args, s.argsTTL()...)
+	args = append(args, s.argsTcpFlags()...)
+	args = append(args, s.argsWSS()...)
+	args = append(args, s.argsTamper()...)
+	args = append(args, s.argsDup()...)
+	args = append(args, s.argsOrig()...)
 
-	// --- DPI DESYNC MAIN ---
+	return strings.Join(args, " ")
+}
+
+func (s Strategy) argsMain() []string {
+	var args []string
 	if s.Mode != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync=%s", s.Mode))
 	}
@@ -160,32 +175,35 @@ func (s Strategy) ToArgs() string {
 	if s.FwMark != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-fwmark=%s", s.FwMark))
 	}
+	return args
+}
 
-	// --- FOOLING ---
-	var fooling []string
+func (s Strategy) argsFooling() []string {
+	var args []string
+	var flags []string
 	if s.Fooling.Md5Sig {
-		fooling = append(fooling, "md5sig")
+		flags = append(flags, "md5sig")
 	}
 	if s.Fooling.BadSum {
-		fooling = append(fooling, "badsum")
+		flags = append(flags, "badsum")
 	}
 	if s.Fooling.BadSeq {
-		fooling = append(fooling, "badseq")
+		flags = append(flags, "badseq")
 	}
 	if s.Fooling.Ts {
-		fooling = append(fooling, "ts")
+		flags = append(flags, "ts")
 	}
 	if s.Fooling.Datanoack {
-		fooling = append(fooling, "datanoack")
+		flags = append(flags, "datanoack")
 	}
 	if s.Fooling.HopByHop {
-		fooling = append(fooling, "hopbyhop")
+		flags = append(flags, "hopbyhop")
 	}
 	if s.Fooling.HopByHop2 {
-		fooling = append(fooling, "hopbyhop2")
+		flags = append(flags, "hopbyhop2")
 	}
-	if len(fooling) > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-fooling=%s", strings.Join(fooling, ",")))
+	if len(flags) > 0 {
+		args = append(args, fmt.Sprintf("--dpi-desync-fooling=%s", strings.Join(flags, ",")))
 	}
 	if s.Fooling.BadSeqIncrement != 0 {
 		args = append(args, fmt.Sprintf("--dpi-desync-badseq-increment=%d", s.Fooling.BadSeqIncrement))
@@ -196,8 +214,11 @@ func (s Strategy) ToArgs() string {
 	if s.Fooling.TsIncrement != 0 {
 		args = append(args, fmt.Sprintf("--dpi-desync-ts-increment=%d", s.Fooling.TsIncrement))
 	}
+	return args
+}
 
-	// --- FAKE ---
+func (s Strategy) argsFake() []string {
+	var args []string
 	if s.Fake.TLS != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-fake-tls=%s", s.Fake.TLS))
 	}
@@ -234,8 +255,11 @@ func (s Strategy) ToArgs() string {
 	if s.Fake.TcpMod != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-fake-tcp-mod=%s", s.Fake.TcpMod))
 	}
+	return args
+}
 
-	// --- SPLIT ---
+func (s Strategy) argsSplit() []string {
+	var args []string
 	if s.Split.Pos != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-split-pos=%s", s.Split.Pos))
 	}
@@ -263,16 +287,22 @@ func (s Strategy) ToArgs() string {
 	if s.Split.IpFragPosUdp > 0 {
 		args = append(args, fmt.Sprintf("--dpi-desync-ipfrag-pos-udp=%d", s.Split.IpFragPosUdp))
 	}
+	return args
+}
 
-	// --- UDP LEN ---
+func (s Strategy) argsUdpLen() []string {
+	var args []string
 	if s.UdpLen.Increment != 0 {
 		args = append(args, fmt.Sprintf("--dpi-desync-udplen-increment=%d", s.UdpLen.Increment))
 	}
 	if s.UdpLen.Pattern != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-udplen-pattern=%s", s.UdpLen.Pattern))
 	}
+	return args
+}
 
-	// --- TTL ---
+func (s Strategy) argsTTL() []string {
+	var args []string
 	if s.TTL.Fixed > 0 {
 		args = append(args, fmt.Sprintf("--dpi-desync-ttl=%d", s.TTL.Fixed))
 	}
@@ -287,20 +317,26 @@ func (s Strategy) ToArgs() string {
 	if s.TTL.Auto6 > 0 {
 		args = append(args, fmt.Sprintf("--dpi-desync-autottl6=%d", s.TTL.Auto6))
 	}
+	return args
+}
 
-	// --- TCP FLAGS ---
+func (s Strategy) argsTcpFlags() []string {
+	var args []string
 	if s.TcpFlags.Set != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-tcp-flags-set=%s", s.TcpFlags.Set))
 	}
 	if s.TcpFlags.Unset != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-tcp-flags-unset=%s", s.TcpFlags.Unset))
 	}
+	return args
+}
 
-	// --- WSS ---
+func (s Strategy) argsWSS() []string {
+	var args []string
 	if s.WSS.Enabled || s.WSS.Value != "" {
 		val := s.WSS.Value
 		if val == "" {
-			val = "1:6" // Default if enabled but empty
+			val = "1:6"
 		}
 		args = append(args, fmt.Sprintf("--wssize=%s", val))
 	}
@@ -310,8 +346,11 @@ func (s Strategy) ToArgs() string {
 	if s.WSS.ForcedCutoff {
 		args = append(args, "--wssize-forced-cutoff=1")
 	}
+	return args
+}
 
-	// --- TAMPER ---
+func (s Strategy) argsTamper() []string {
+	var args []string
 	if s.Tamper.HostCase {
 		args = append(args, "--hostcase")
 	}
@@ -333,8 +372,11 @@ func (s Strategy) ToArgs() string {
 	if s.Tamper.SynAckSplit != "" {
 		args = append(args, "--synack-split="+s.Tamper.SynAckSplit)
 	}
+	return args
+}
 
-	// --- DUP ---
+func (s Strategy) argsDup() []string {
+	var args []string
 	if s.Dup.Count > 0 {
 		args = append(args, fmt.Sprintf("--dup=%d", s.Dup.Count))
 	}
@@ -380,8 +422,11 @@ func (s Strategy) ToArgs() string {
 	if s.Dup.TcpFlagsUnset != "" {
 		args = append(args, fmt.Sprintf("--dup-tcp-flags-unset=%s", s.Dup.TcpFlagsUnset))
 	}
+	return args
+}
 
-	// --- ORIG ---
+func (s Strategy) argsOrig() []string {
+	var args []string
 	if s.Orig.TTL > 0 {
 		args = append(args, fmt.Sprintf("--orig-ttl=%d", s.Orig.TTL))
 	}
@@ -406,6 +451,5 @@ func (s Strategy) ToArgs() string {
 	if s.Orig.TcpFlagsUnset != "" {
 		args = append(args, fmt.Sprintf("--orig-tcp-flags-unset=%s", s.Orig.TcpFlagsUnset))
 	}
-
-	return strings.Join(args, " ")
+	return args
 }

@@ -3,7 +3,6 @@ package evolution
 import (
 	"math/rand"
 	"sort"
-	"time"
 
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
@@ -17,7 +16,6 @@ const (
 // Evolve принимает результаты прошлого поколения и возвращает новое строго фиксированного размера
 func Evolve(results []model.ScoredStrategy, discoveredBins []string) []nfqws.Strategy {
 	var nextGen []nfqws.Strategy
-	rand.Seed(time.Now().UnixNano())
 	mutator := NewMutator(discoveredBins)
 
 	// 1. Сортировка (на всякий случай, если оркестратор не отсортировал)

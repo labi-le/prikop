@@ -11,7 +11,15 @@ const (
 	MaxWorkers        = 50
 	CheckTimeout      = 4000 * time.Millisecond
 	TargetSuccessRate = 80
+	// SocketDir - директория для сокетов внутри контейнеров
+	SocketDir = "/var/run/prikop"
 )
+
+// WorkerRequest отправляется оркестратором воркеру
+type WorkerRequest struct {
+	StrategyArgs string `json:"strategy_args"`
+	TargetGroup  string `json:"target_group"`
+}
 
 // StrategyConfig — это интерфейс, который должна реализовать стратегия NFQWS
 type StrategyConfig interface {

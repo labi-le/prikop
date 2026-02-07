@@ -1,97 +1,101 @@
 package worker
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
+	"net"
 	"os"
-	"os/exec"
 	"prikop/internal/model"
 	"prikop/internal/verifier"
-	"strings"
 	"time"
 )
 
-func RunWorkerMode(strategyArgs string, targetGroup string) {
-	setupIptables(targetGroup)
+// RunWorkerServer starts the worker in listening mode
+func RunWorkerServer(socketPath string) {
+	_ = os.Remove(socketPath)
 
-	cmd, stderr := startNFQWS(strategyArgs)
-	defer killCmd(cmd)
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		fatalJSON(fmt.Sprintf("listen error: %v", err))
+	}
+	// Make socket accessible to everyone (orchestrator needs to read/write)
+	if err := os.Chmod(socketPath, 0777); err != nil {
+		fmt.Fprintf(os.Stderr, "chmod warning: %v\n", err)
+	}
+	defer listener.Close()
 
-	v := verifier.NewVerifier(targetGroup)
-	time.Sleep(200 * time.Millisecond)
+	fmt.Printf("Worker listening on %s\n", socketPath)
 
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "accept error: %v\n", err)
+			continue
+		}
+
+		// Blocks to process one request at a time (container has only 1 worker anyway)
+		handleConnection(conn)
+	}
+}
+
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	var req model.WorkerRequest
+	if err := json.NewDecoder(conn).Decode(&req); err != nil {
+		sendError(conn, fmt.Sprintf("bad request: %v", err))
+		return
+	}
+
+	// Ensure clean state before running
+	Cleanup()
+	defer Cleanup()
+
+	res := executeTest(req)
+
+	if err := json.NewEncoder(conn).Encode(res); err != nil {
+		fmt.Fprintf(os.Stderr, "write response error: %v\n", err)
+	}
+}
+
+func executeTest(req model.WorkerRequest) model.WorkerResult {
+	if err := SetupIptables(req.TargetGroup); err != nil {
+		return model.WorkerResult{Error: fmt.Sprintf("iptables: %v", err)}
+	}
+
+	cmd, stdout := StartNFQWS(req.StrategyArgs)
+	if cmd == nil {
+		return model.WorkerResult{Error: "nfqws start failed"}
+	}
+	defer KillCmd(cmd)
+
+	// Short delay to let nfqws initialize
+	time.Sleep(50 * time.Millisecond)
+	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+		return model.WorkerResult{Error: fmt.Sprintf("nfqws crashed: %s", stdout.String())}
+	}
+
+	v := verifier.NewVerifier(req.TargetGroup)
 	ctx, cancel := context.WithTimeout(context.Background(), model.CheckTimeout)
 	defer cancel()
 
 	checkRes := v.Run(ctx)
 
-	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-		fatalJSON("NFQWS crashed: " + stderr.String())
-	}
-
-	res := model.WorkerResult{
+	return model.WorkerResult{
 		Success:      checkRes.Success,
 		SuccessCount: checkRes.SuccessCount,
 		TotalCount:   checkRes.TotalCount,
 		Passed:       checkRes.PassedUrls,
 		Failed:       checkRes.FailedUrls,
-		Code:         200,
-	}
-	printJSON(res)
-}
-
-func setupIptables(group string) {
-	cmds := [][]string{
-		{"iptables", "-t", "mangle", "-F"},
-		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "tcp", "-m", "multiport", "--dports", "80,443", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
-		{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "443", "-j", "NFQUEUE", "--queue-num", model.QueueNum},
-	}
-
-	if strings.Contains(group, "discord_udp") {
-		cmds = append(cmds, []string{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "50000:65535", "-j", "NFQUEUE", "--queue-num", model.QueueNum})
-	} else if strings.Contains(group, "discord_l7") {
-		// Specific ports for L7 test
-		cmds = append(cmds, []string{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "19294:19344", "-j", "NFQUEUE", "--queue-num", model.QueueNum})
-		cmds = append(cmds, []string{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "50000:50100", "-j", "NFQUEUE", "--queue-num", model.QueueNum})
-	} else if strings.Contains(group, "discord") {
-		// Fallback for generic discord group if logic matches
-		cmds = append(cmds, []string{"iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--dport", "50000:65535", "-j", "NFQUEUE", "--queue-num", model.QueueNum})
-	}
-
-	for _, args := range cmds {
-		_ = exec.Command(args[0], args[1:]...).Run()
 	}
 }
 
-func startNFQWS(args string) (*exec.Cmd, *bytes.Buffer) {
-	fullArgs := strings.Fields(fmt.Sprintf("--qnum=%s %s", model.QueueNum, args))
-	cmd := exec.Command("nfqws", fullArgs...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdout = io.Discard
-
-	if err := cmd.Start(); err != nil {
-		fatalJSON(fmt.Sprintf("Failed to start nfqws: %v", err))
-	}
-	return cmd, &stderr
-}
-
-func killCmd(cmd *exec.Cmd) {
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-}
-
-func printJSON(v interface{}) {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
+func sendError(conn net.Conn, msg string) {
+	_ = json.NewEncoder(conn).Encode(model.WorkerResult{Error: msg})
 }
 
 func fatalJSON(err string) {
-	printJSON(model.WorkerResult{Success: false, Error: err})
+	_ = json.NewEncoder(os.Stdout).Encode(model.WorkerResult{Error: err})
 	os.Exit(1)
 }

@@ -4,16 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sort"
+	"os"
+	"os/signal"
 	"strings"
-	"sync"
-	"time"
+	"syscall"
 
 	"prikop/internal/container"
-	"prikop/internal/evolution"
-	"prikop/internal/galaxy"
 	"prikop/internal/model"
-	"prikop/internal/nfqws"
 	"prikop/internal/recon"
 
 	"github.com/moby/moby/client"
@@ -31,22 +28,57 @@ type Phase struct {
 	Filters string
 }
 
+var pool *container.WorkerPool
+
 func Run(cfg Config) {
-	ctx := context.Background()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
-		log.Fatalf("Docker client: %v", err)
+		log.Fatalf("Error creating docker client: %v", err)
 	}
 	defer cli.Close()
 
-	// 1. Discovery
-	bins, err := container.DiscoverBinFiles(ctx, cli, cfg.FakePath)
-	if err != nil {
-		log.Fatalf("No bin files: %v", err)
+	hostSockDir := os.Getenv("HOST_SOCKET_DIR")
+	if hostSockDir == "" {
+		hostSockDir = "/tmp/prikop_sockets"
 	}
-	fmt.Printf(">>> Found %d bin files\n", len(bins))
 
-	phases := []Phase{
+	pool = container.NewWorkerPool(ctx, cli, model.MaxWorkers, hostSockDir)
+
+	if err := pool.Start(); err != nil {
+		log.Fatalf("Worker pool start failed: %v", err)
+	}
+	defer func() {
+		fmt.Println(">>> Cleaning up resources...")
+		pool.Stop()
+	}()
+
+	fmt.Println(">>> RUNNING GLOBAL RECONNAISSANCE")
+	report := recon.RunScout(ctx, pool, "google")
+	if ctx.Err() != nil {
+		return
+	}
+	fmt.Printf("Recon Report: %+v\n", report)
+
+	discoveredBins, err := container.DiscoverBinFiles(ctx, cli, cfg.FakePath)
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		log.Fatalf("Failed to discover bins: %v", err)
+	}
+	fmt.Printf(">>> Found %d bin files\n", len(discoveredBins))
+
+	phases := definePhases(cfg.TargetsPath)
+	optimizer := NewOptimizer(pool)
+
+	executePhases(ctx, optimizer, phases, discoveredBins, report)
+}
+
+func definePhases(targetsPath string) []Phase {
+	return []Phase{
 		{
 			Name:    "GENERAL TCP (TCP 16-20 Checker)",
 			Group:   "general",
@@ -57,40 +89,53 @@ func Run(cfg Config) {
 			Name:    "GOOGLE TCP",
 			Group:   "google_tcp",
 			Gens:    5,
-			Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", cfg.TargetsPath),
+			Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", targetsPath),
 		},
 		{
 			Name:    "GOOGLE UDP (QUIC)",
 			Group:   "google_udp",
 			Gens:    5,
-			Filters: fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", cfg.TargetsPath),
+			Filters: fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", targetsPath),
 		},
 		{
 			Name:    "DISCORD UDP (Voice)",
 			Group:   "discord_udp",
 			Gens:    5,
-			Filters: fmt.Sprintf("--filter-udp=50000-65535,443 --hostlist=%s/discord.txt", cfg.TargetsPath),
+			Filters: fmt.Sprintf("--filter-udp=50000-65535,443 --hostlist=%s/discord.txt", targetsPath),
 		},
 		{
 			Name:    "DISCORD UDP (STUN)",
 			Group:   "discord_l7",
 			Gens:    5,
-			Filters: fmt.Sprintf("--filter-udp=19294-19344 --filter-l7=discord,stun --hostlist=%s/discord.txt", cfg.TargetsPath),
+			Filters: fmt.Sprintf("--filter-udp=19294-19344 --filter-l7=discord,stun --hostlist=%s/discord.txt", targetsPath),
 		},
 	}
+}
 
+func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []string, report model.ReconReport) {
 	var finalConfigs []string
 
 	for _, p := range phases {
+		// CHECKPOINT: Check before starting phase
+		if ctx.Err() != nil {
+			fmt.Println("\n>>> Process aborted by user.")
+			return
+		}
+
 		fmt.Printf("\n>>> PHASE: %s\n", p.Name)
 		fmt.Printf(">>> Filters: %s\n", p.Filters)
 
-		best := runPhase(ctx, cli, p.Group, bins, p.Gens)
+		best := opt.RunPhase(ctx, p.Group, bins, p.Gens, report)
+
+		// Check cancellation return
+		if ctx.Err() != nil {
+			fmt.Println("\n>>> Process aborted by user.")
+			return
+		}
 
 		if best != nil {
 			strategyArgs := best.Config.ToArgs()
 			fmt.Printf(">>> WINNER: %s\n", strategyArgs)
-
 			block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
 			finalConfigs = append(finalConfigs, block)
 		} else {
@@ -114,110 +159,4 @@ func printFinalConfig(configs []string) {
 	finalStr := strings.Join(configs, "\n--new\n")
 	fmt.Println(finalStr)
 	fmt.Println("\n=======================================================")
-}
-
-func runPhase(ctx context.Context, cli *client.Client, group string, bins []string, maxGens int) *model.ScoredStrategy {
-	// 0. Active Reconnaissance (New Step)
-	reconReport := recon.RunScout(ctx, cli, group)
-
-	var population []nfqws.Strategy
-
-	// Inject Recon Report into Sniper
-	population = galaxy.GenerateZeroGeneration(bins, reconReport)
-
-	var globalBest *model.ScoredStrategy
-
-	for gen := 0; gen < maxGens; gen++ {
-		fmt.Printf(">>> GEN %d/%d (%d strategies)\n", gen, maxGens, len(population))
-
-		results := executeBatch(ctx, cli, population, group)
-
-		sort.Slice(results, func(i, j int) bool {
-			return evolution.CalculateScore(results[i].Result, results[i].Complexity) >
-				evolution.CalculateScore(results[j].Result, results[j].Complexity)
-		})
-
-		if len(results) > 0 {
-			bestGen := results[0]
-			score := evolution.CalculateScore(bestGen.Result, bestGen.Complexity)
-
-			if globalBest == nil || score > evolution.CalculateScore(globalBest.Result, globalBest.Complexity) {
-				globalBest = &bestGen
-				fmt.Printf(">>> NEW BEST: %s (Success: %d/%d)\n", globalBest.Config.ToArgs(), globalBest.Result.SuccessCount, globalBest.Result.TotalCount)
-
-				if len(globalBest.Result.Passed) > 0 {
-					fmt.Println("    [+] PASSED:")
-					for _, u := range globalBest.Result.Passed {
-						fmt.Printf("        %s\n", u)
-					}
-				}
-				if len(globalBest.Result.Failed) > 0 {
-					fmt.Println("    [-] FAILED:")
-					for _, u := range globalBest.Result.Failed {
-						fmt.Printf("        %s\n", u)
-					}
-				}
-			}
-		}
-
-		if globalBest != nil && globalBest.Result.SuccessCount == globalBest.Result.TotalCount && gen > 3 {
-			if globalBest.Complexity <= 2 {
-				fmt.Println(">>> Ideal strategy found, skipping remaining generations.")
-				break
-			}
-		}
-
-		population = evolution.Evolve(results, bins)
-		if len(population) == 0 {
-			break
-		}
-	}
-
-	return globalBest
-}
-
-func executeBatch(ctx context.Context, cli *client.Client, strats []nfqws.Strategy, group string) []model.ScoredStrategy {
-	resultsCh := make(chan model.ScoredStrategy, len(strats))
-	sem := make(chan struct{}, model.MaxWorkers)
-	var wg sync.WaitGroup
-
-	for _, s := range strats {
-		wg.Add(1)
-		go func(strat nfqws.Strategy) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			tCtx, cancel := context.WithTimeout(ctx, model.ContainerTimeout)
-			defer cancel()
-
-			args := strat.ToArgs()
-			if args == "" {
-				return
-			}
-
-			start := time.Now()
-			wRes, logs := container.RunContainerTest(tCtx, cli, args, group)
-			dur := time.Since(start)
-
-			if wRes.Success {
-				resultsCh <- model.ScoredStrategy{
-					Config:     strat,
-					RawArgs:    args,
-					Duration:   dur,
-					Result:     wRes,
-					SystemLogs: logs,
-					Complexity: strat.Repeats,
-				}
-			}
-		}(s)
-	}
-	wg.Wait()
-	close(resultsCh)
-
-	var res []model.ScoredStrategy
-	for r := range resultsCh {
-		res = append(res, r)
-	}
-	return res
 }

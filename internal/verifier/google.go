@@ -28,5 +28,5 @@ func (v *GoogleVerifier) Run(ctx context.Context) CheckResult {
 		}
 	}
 
-	return runParallelChecks(ctx, targets)
+	return ExecuteChecks(ctx, targets)
 }
