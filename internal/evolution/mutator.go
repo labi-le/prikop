@@ -10,10 +10,11 @@ import (
 
 type Mutator struct {
 	AvailableBins []string
+	Proto         string
 }
 
-func NewMutator(bins []string) *Mutator {
-	return &Mutator{AvailableBins: bins}
+func NewMutator(bins []string, proto string) *Mutator {
+	return &Mutator{AvailableBins: bins, Proto: proto}
 }
 
 func (m *Mutator) Mutate(s *nfqws.Strategy) {
@@ -22,16 +23,15 @@ func (m *Mutator) Mutate(s *nfqws.Strategy) {
 
 func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 	r := rand.Float64()
-
 	m.sanitize(s)
 
 	if feedback == model.ReasonReset {
-		if r < 0.6 {
+		if r < 0.4 {
 			m.mutateFooling(s)
-		} else if r < 0.9 {
-			m.mutateTTL(s)
-		} else {
+		} else if r < 0.7 {
 			m.mutateSplit(s)
+		} else {
+			m.mutateFake(s)
 		}
 		m.sanitize(s)
 		return
@@ -39,96 +39,76 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 
 	if feedback == model.ReasonTimeout {
 		if r < 0.5 {
-			m.mutateFake(s)
-		} else if r < 0.8 {
-			m.mutateWSS(s)
-		} else {
 			m.mutateRepeats(s)
+		} else if r < 0.8 {
+			m.mutateFake(s)
+		} else {
+			m.mutateMode(s)
 		}
 		m.sanitize(s)
 		return
 	}
 
+	// Random Exploration
 	if r < 0.15 {
 		m.mutateMode(s)
-		if s.Mode == "fake" {
+		if strings.Contains(s.Mode, "fake") {
 			m.mutateFake(s)
-		} else {
+		}
+		if strings.Contains(s.Mode, "split") {
 			m.mutateSplit(s)
 		}
-		m.sanitize(s)
-		return
-	}
-
-	subR := rand.Float64()
-	if s.Mode == "fake" {
-		if subR < 0.4 {
-			m.mutateFake(s)
-		} else if subR < 0.7 {
-			m.mutateFooling(s)
-		} else {
-			m.mutateGlobal(s)
-		}
+	} else if r < 0.4 {
+		m.mutateFake(s)
+	} else if r < 0.6 {
+		m.mutateSplit(s)
+	} else if r < 0.8 {
+		m.mutateFooling(s)
 	} else {
-		if subR < 0.5 {
-			m.mutateSplit(s)
-		} else if subR < 0.8 {
-			m.mutateFooling(s)
-		} else {
-			m.mutateGlobal(s)
-		}
+		m.mutateGlobal(s)
 	}
 
 	m.sanitize(s)
 }
 
-func (m *Mutator) mutateGlobal(s *nfqws.Strategy) {
-	r := rand.Float64()
-	if r < 0.33 {
-		m.mutateRepeats(s)
-	} else if r < 0.66 {
-		m.mutateTTL(s)
-	} else {
-		m.mutateWSS(s)
-	}
-}
-
-// sanitize enforce strict consistency rules to prevent nfqws crashes
 func (m *Mutator) sanitize(s *nfqws.Strategy) {
-	isFake := s.Mode == "fake"
-	isSplit := s.Mode == "multisplit" || s.Mode == "fakedsplit" || s.Mode == "multidisorder" || s.Mode == "ipfrag1"
+	isFake := strings.Contains(s.Mode, "fake")
+	isSplit := strings.Contains(s.Mode, "split") || strings.Contains(s.Mode, "disorder") || strings.Contains(s.Mode, "ipfrag")
+	isHostFake := strings.Contains(s.Mode, "hostfakesplit")
+	isFakedSplit := strings.Contains(s.Mode, "fakedsplit") || strings.Contains(s.Mode, "fakeddisorder")
 
 	if !isFake {
 		s.Fake = nfqws.FakeOptions{}
 	} else {
-		if s.Fake.TLS == "" && s.Fake.Quic == "" && len(m.AvailableBins) > 0 {
+		if s.Fake.TLS == "" && s.Fake.Quic == "" && s.Fake.UnknownUdp == "" && len(m.AvailableBins) > 0 {
 			m.mutateFake(s)
 		}
 
-		// CRITICAL FIX: Prevent "fake structure invalid" error
-		// rndsni works ONLY with valid TLS ClientHello packets.
-		if s.Fake.TlsMod == "rndsni" && s.Fake.TLS != "" {
-			binName := strings.ToLower(s.Fake.TLS)
-			// Heuristic: If binary name doesn't imply TLS, disable the mod
-			if !strings.Contains(binName, "tls") && !strings.Contains(binName, "clienthello") {
-				s.Fake.TlsMod = ""
-			}
-		}
-
-		// Ensure we don't have dual modes active
-		if s.Fake.TLS != "" && s.Fake.Quic != "" {
-			// Prefer TLS slot as it's more generic
+		// Protocol Enforce
+		if m.Proto == "udp" {
+			s.Fake.TLS = ""
+		} else {
 			s.Fake.Quic = ""
+			s.Fake.UnknownUdp = ""
 		}
 	}
 
-	if !isSplit {
+	// General Split Cleanup
+	if !isSplit && !isHostFake {
 		s.Split = nfqws.SplitOptions{}
 	}
 
-	if s.TTL.Auto > 0 || s.TTL.AutoStr != "" {
-		s.TTL.Fixed = 0
-		s.TTL.Fixed6 = 0
+	// Strict cleanup for mode-specific params
+	if !isHostFake {
+		s.Split.HostMod = ""
+		s.Split.HostMid = ""
+	} else if s.Split.HostMod == "" {
+		s.Split.HostMod = "host=www.google.com"
+	}
+
+	if !isFakedSplit {
+		s.Split.FakedMod = ""
+		s.Split.FakedPattern = ""
 	}
 
 	if s.Repeats < 1 {
@@ -139,20 +119,36 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 }
 
 func (m *Mutator) mutateMode(s *nfqws.Strategy) {
-	modes := []string{
-		"fake", "fake", "fake",
-		"multisplit", "multisplit",
-		"multidisorder",
-		"fakedsplit",
+	if m.Proto == "tcp" {
+		modes := []string{
+			"fake,multisplit", "fake,multisplit", // Combo Priority
+			"hostfakesplit", "hostfakesplit", // Masking Priority
+			"fake",
+			"multisplit",
+			"fakedsplit",
+		}
+		s.Mode = modes[rand.Intn(len(modes))]
+	} else {
+		modes := []string{
+			"fake", "fake", "fake", // UDP loves Fake
+			"multisplit",
+		}
+		s.Mode = modes[rand.Intn(len(modes))]
 	}
-	s.Mode = modes[rand.Intn(len(modes))]
 }
 
 func (m *Mutator) mutateRepeats(s *nfqws.Strategy) {
 	delta := rand.Intn(3) - 1
 	s.Repeats += delta
+	maxRepeats := 6
+	if m.Proto == "udp" {
+		maxRepeats = 10 // Higher for UDP
+	}
+	if s.Repeats > maxRepeats {
+		s.Repeats = maxRepeats
+	}
 	if rand.Float64() < 0.1 {
-		s.Repeats = 1 + rand.Intn(5)
+		s.Repeats = 1 + rand.Intn(maxRepeats)
 	}
 }
 
@@ -161,8 +157,27 @@ func (m *Mutator) mutateWSS(s *nfqws.Strategy) {
 		s.WSS.Enabled = !s.WSS.Enabled
 	}
 	if s.WSS.Enabled {
-		sizes := []string{"1:6", "1:8", "1:10", "1:100", "500"}
+		sizes := []string{"1:6", "1:8", "1:10", "1:100", "500", "800"}
 		s.WSS.Value = sizes[rand.Intn(len(sizes))]
+	}
+}
+
+func (m *Mutator) mutateGlobal(s *nfqws.Strategy) {
+	r := rand.Float64()
+	if r < 0.3 {
+		m.mutateRepeats(s)
+	} else if r < 0.5 {
+		// Toggle AnyProtocol/Cutoff for UDP
+		if m.Proto == "udp" {
+			s.AnyProtocol = !s.AnyProtocol
+			if s.AnyProtocol {
+				s.Cutoff = "d2"
+			} else {
+				s.Cutoff = ""
+			}
+		}
+	} else {
+		m.mutateWSS(s)
 	}
 }
 
@@ -172,51 +187,55 @@ func (m *Mutator) mutateFake(s *nfqws.Strategy) {
 	}
 	bin := m.AvailableBins[rand.Intn(len(m.AvailableBins))]
 
-	s.Fake.TLS = ""
-	s.Fake.Quic = ""
-	s.Fake.TlsMod = ""
-
-	lowerBin := strings.ToLower(bin)
-	isTLS := strings.Contains(lowerBin, "tls") || strings.Contains(lowerBin, "clienthello")
-	isQUIC := strings.Contains(lowerBin, "quic") || strings.Contains(lowerBin, "udp")
-
-	if isTLS {
+	if m.Proto == "tcp" {
 		s.Fake.TLS = bin
-		if rand.Float64() < 0.3 {
+		r := rand.Float64()
+		if r < 0.3 {
 			s.Fake.TlsMod = "rndsni"
-		} else if rand.Float64() < 0.3 {
-			s.Fake.TlsMod = "rnd"
+		} else if r < 0.7 {
+			s.Fake.TlsMod = "rnd,dupsid" // Advanced mod
 		} else {
-			s.Fake.TlsMod = ""
-		}
-	} else if isQUIC {
-		s.Fake.Quic = bin
-		if rand.Float64() < 0.5 {
 			s.Fake.TlsMod = "rnd"
-		} else {
-			s.Fake.TlsMod = ""
 		}
 	} else {
-		// Fallback for unknown binaries (Wireguard, DHT, etc)
-		// Safe to use in TLS slot, BUT strictly no rndsni (enforced by sanitize)
-		s.Fake.TLS = bin
-		s.Fake.TlsMod = ""
+		// UDP Logic
+		r := rand.Float64()
+		if r < 0.5 {
+			s.Fake.Quic = bin
+			s.Fake.TlsMod = "rnd"
+			s.Fake.UnknownUdp = ""
+		} else {
+			s.Fake.UnknownUdp = bin
+			s.Fake.Quic = ""
+		}
 	}
 }
 
 func (m *Mutator) mutateSplit(s *nfqws.Strategy) {
-	positions := []string{"1", "2", "3", "1,sniext+1", "2,sniext+1", "1,midsld"}
-	s.Split.Pos = positions[rand.Intn(len(positions))]
-
-	if rand.Float64() < 0.4 {
-		if rand.Intn(2) == 0 {
-			s.Split.SeqOvl = 0
-		} else {
-			s.Split.SeqOvl = 1 + rand.Intn(500)
+	if strings.Contains(s.Mode, "hostfakesplit") {
+		// Mutate Host
+		hosts := []string{
+			"host=www.google.com",
+			"host=mapgl.2gis.com",
+			"host=api.google.com",
+			"host=cloudflare.com",
 		}
+		s.Split.HostMod = hosts[rand.Intn(len(hosts))]
+		s.Split.SeqOvl = 0
+		return
 	}
 
-	if rand.Float64() < 0.2 && len(m.AvailableBins) > 0 {
+	positions := []string{"1", "2", "2,sld", "2,sniext+1"}
+	s.Split.Pos = positions[rand.Intn(len(positions))]
+
+	if rand.Float64() < 0.6 {
+		// User config used 620, let's allow large overlaps
+		s.Split.SeqOvl = 1 + rand.Intn(700)
+	} else {
+		s.Split.SeqOvl = 0
+	}
+
+	if rand.Float64() < 0.4 && len(m.AvailableBins) > 0 {
 		s.Split.Pattern = m.AvailableBins[rand.Intn(len(m.AvailableBins))]
 	}
 }
@@ -237,7 +256,7 @@ func (m *Mutator) mutateTTL(s *nfqws.Strategy) {
 
 func (m *Mutator) mutateFooling(s *nfqws.Strategy) {
 	flip := func(current bool) bool {
-		if rand.Float64() < 0.2 {
+		if rand.Float64() < 0.25 {
 			return !current
 		}
 		return current

@@ -4,20 +4,21 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strings"
 
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
 )
 
 const (
-	PopulationSize = 100
+	PopulationSize    = 100
+	ScoreMaskingBonus = 5.0
+	ScoreBadSumBonus  = 2.0
 )
 
-// Evolve принимает результаты прошлого поколения и возвращает новое.
-// Использует Tournament Selection с кластеризацией для сохранения разнообразия.
-func Evolve(results []model.ScoredStrategy, discoveredBins []string) []nfqws.Strategy {
+func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto string) []nfqws.Strategy {
 	var nextGen []nfqws.Strategy
-	mutator := NewMutator(discoveredBins)
+	mutator := NewMutator(discoveredBins, proto)
 
 	clusters := make(map[string][]model.ScoredStrategy)
 
@@ -26,13 +27,16 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string) []nfqws.Str
 		if !ok {
 			continue
 		}
+		// Clusters key
 		key := strat.Mode
-		if strat.Mode == "fake" {
-			// Различаем fake-tls и fake-quic
+		// Differentiate fake types in clusters
+		if strings.Contains(strat.Mode, "fake") {
 			if strat.Fake.Quic != "" {
 				key += "-quic"
-			} else {
+			} else if strat.Fake.TLS != "" {
 				key += "-tls"
+			} else if strat.Fake.UnknownUdp != "" {
+				key += "-udp"
 			}
 		} else {
 			key += "-" + strat.Split.Pos
@@ -46,60 +50,46 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string) []nfqws.Str
 
 	for _, cluster := range clusters {
 		sort.Slice(cluster, func(i, j int) bool {
-			return CalculateScore(cluster[i].Result, cluster[i].Complexity) >
-				CalculateScore(cluster[j].Result, cluster[j].Complexity)
+			s1, _ := cluster[i].Config.(nfqws.Strategy)
+			s2, _ := cluster[j].Config.(nfqws.Strategy)
+			return CalculateScore(cluster[i].Result, cluster[i].Complexity, s1) >
+				CalculateScore(cluster[j].Result, cluster[j].Complexity, s2)
 		})
 
-		// Берем топ-1, это Элита кластера
 		bestParents = append(bestParents, cluster[0])
-
-		// Сохраняем элиту в новое поколение без изменений
 		if s, ok := cluster[0].Config.(nfqws.Strategy); ok {
 			nextGen = append(nextGen, s)
 		}
 
-		// Если кластер большой и успешный, берем еще пару родителей
 		if len(cluster) > 3 && cluster[0].Result.SuccessCount > 0 {
-			bestParents = append(bestParents, cluster[1], cluster[2])
+			if s, ok := cluster[1].Config.(nfqws.Strategy); ok {
+				nextGen = append(nextGen, s)
+			}
 		}
 	}
 
-	// 3. Breeding with Feedback
-	// Заполняем популяцию мутантами от лучших родителей
 	slotsRemaining := PopulationSize - len(nextGen)
 
-	// Если родителей слишком мало, добиваем Fresh Blood позже
 	if len(bestParents) > 0 {
 		for i := 0; i < slotsRemaining; i++ {
-			// Roulette Wheel selection among best parents could be better,
-			// but Random pick is fine for now given we pre-filtered bestParents
 			parent := bestParents[rand.Intn(len(bestParents))]
-
 			if s, ok := parent.Config.(nfqws.Strategy); ok {
 				child := s
-
-				// CRITICAL: Используем причину сбоя родителя для направленной мутации
-				// Если родитель был успешен частично (SuccessCount > 0), FailureType может быть пустым.
-				// В таком случае SmartMutate сделает "fine tuning".
 				mutator.SmartMutate(&child, parent.Result.FailureType)
-
 				nextGen = append(nextGen, child)
 			}
 		}
 	}
 
-	// 4. Emergency Fill (Fresh Blood)
-	// Если стратегий все еще мало (или все родители умерли)
 	for len(nextGen) < PopulationSize {
 		newStrat := nfqws.Strategy{
 			Mode:    "fake",
-			Repeats: 1 + rand.Intn(4),
+			Repeats: 1 + rand.Intn(3),
 		}
-		mutator.Mutate(&newStrat) // Полный рандом
+		mutator.Mutate(&newStrat)
 		nextGen = append(nextGen, newStrat)
 	}
 
-	// Обрезка на всякий случай
 	if len(nextGen) > PopulationSize {
 		nextGen = nextGen[:PopulationSize]
 	}
@@ -107,20 +97,34 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string) []nfqws.Str
 	return nextGen
 }
 
-func CalculateScore(res model.WorkerResult, complexity int) float64 {
+func CalculateScore(res model.WorkerResult, complexity int, strat nfqws.Strategy) float64 {
 	if res.TotalCount == 0 {
 		return 0
 	}
 
 	successRate := (float64(res.SuccessCount) / float64(res.TotalCount)) * 100.0
+	score := successRate
 
-	// Огромный бонус за 100% успех
-	if res.SuccessCount == res.TotalCount {
-		successRate += 50.0
+	if res.SuccessCount == res.TotalCount && res.TotalCount > 0 {
+		score += 50.0
 	}
 
-	// Штраф за сложность (repeats)
-	penalty := float64(complexity) * 2.0 // Увеличили штраф, чтобы при прочих равных выбирал меньше repeats
+	// Only apply bonus if success rate is decent (>30%) to avoid "cargo cult"
+	if successRate > 30.0 {
+		if strings.Contains(strat.Mode, "fake") || strings.Contains(strat.Mode, "hostfake") {
+			score += ScoreMaskingBonus
+		}
+		if strat.Fooling.BadSum {
+			score += ScoreBadSumBonus
+		}
+	}
 
-	return successRate - penalty
+	penalty := float64(complexity) * 2.0
+	score -= penalty
+
+	if score < 0 {
+		score = 0
+	}
+
+	return score
 }

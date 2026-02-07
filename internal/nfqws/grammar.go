@@ -56,13 +56,18 @@ type FakeOptions struct {
 }
 
 type SplitOptions struct {
-	Pos          string
-	SeqOvl       int
-	Pattern      string
-	FakedPattern string
-	FakedMod     string
-	HostMid      string
-	HostMod      string
+	Pos     string // --dpi-desync-split-pos
+	SeqOvl  int    // --dpi-desync-split-seqovl
+	Pattern string // --dpi-desync-split-seqovl-pattern
+
+	// Fakedsplit specific
+	FakedPattern string // --dpi-desync-fakedsplit-pattern
+	FakedMod     string // --dpi-desync-fakedsplit-mod
+
+	// Hostfakesplit specific
+	HostMid string // --dpi-desync-hostfakesplit-midhost
+	HostMod string // --dpi-desync-hostfakesplit-mod
+
 	IpFragPosTcp int
 	IpFragPosUdp int
 }
@@ -161,7 +166,8 @@ func (s Strategy) argsMain() []string {
 		args = append(args, fmt.Sprintf("--dpi-desync-repeats=%d", s.Repeats))
 	}
 	if s.AnyProtocol {
-		args = append(args, "--dpi-desync-any-protocol")
+		// FIXED: Explicitly set =1 to match help syntax "0|1"
+		args = append(args, "--dpi-desync-any-protocol=1")
 	}
 	if s.SkipNoSNI {
 		args = append(args, "--dpi-desync-skip-nosni=1")
@@ -269,18 +275,25 @@ func (s Strategy) argsSplit() []string {
 	if s.Split.Pattern != "" {
 		args = append(args, fmt.Sprintf("--dpi-desync-split-seqovl-pattern=%s", s.Split.Pattern))
 	}
-	if s.Split.FakedPattern != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fakedsplit-pattern=%s", s.Split.FakedPattern))
+
+	if strings.Contains(s.Mode, "fakedsplit") || strings.Contains(s.Mode, "fakeddisorder") {
+		if s.Split.FakedPattern != "" {
+			args = append(args, fmt.Sprintf("--dpi-desync-fakedsplit-pattern=%s", s.Split.FakedPattern))
+		}
+		if s.Split.FakedMod != "" {
+			args = append(args, fmt.Sprintf("--dpi-desync-fakedsplit-mod=%s", s.Split.FakedMod))
+		}
 	}
-	if s.Split.FakedMod != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fakedsplit-mod=%s", s.Split.FakedMod))
+
+	if strings.Contains(s.Mode, "hostfakesplit") {
+		if s.Split.HostMid != "" {
+			args = append(args, fmt.Sprintf("--dpi-desync-hostfakesplit-midhost=%s", s.Split.HostMid))
+		}
+		if s.Split.HostMod != "" {
+			args = append(args, fmt.Sprintf("--dpi-desync-hostfakesplit-mod=%s", s.Split.HostMod))
+		}
 	}
-	if s.Split.HostMid != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-hostfakesplit-midhost=%s", s.Split.HostMid))
-	}
-	if s.Split.HostMod != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-hostfakesplit-mod=%s", s.Split.HostMod))
-	}
+
 	if s.Split.IpFragPosTcp > 0 {
 		args = append(args, fmt.Sprintf("--dpi-desync-ipfrag-pos-tcp=%d", s.Split.IpFragPosTcp))
 	}

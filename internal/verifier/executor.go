@@ -154,7 +154,6 @@ func ExecuteChecks(ctx context.Context, targets []Target) CheckResult {
 	}
 }
 
-// analyzeError пытается классифицировать ошибку сети
 func analyzeError(err error) model.FailureReason {
 	if err == nil {
 		return model.ReasonNone
@@ -195,8 +194,11 @@ func analyzeError(err error) model.FailureReason {
 func checkSTUN(ctx context.Context, address string) bool {
 	address = strings.TrimPrefix(address, "https://")
 	address = strings.TrimPrefix(address, "http://")
+	if !strings.Contains(address, ":") {
+		address += ":3478"
+	}
 
-	d := net.Dialer{Timeout: 3 * time.Second}
+	d := net.Dialer{Timeout: 2 * time.Second}
 	conn, err := d.DialContext(ctx, "udp", address)
 	if err != nil {
 		return false
@@ -209,21 +211,23 @@ func checkSTUN(ctx context.Context, address string) bool {
 	binary.BigEndian.PutUint32(req[4:8], 0x2112A442) // Magic Cookie
 	rand.Read(req[8:20])                             // Transaction ID
 
-	if _, err := conn.Write(req); err != nil {
-		return false
+	// Retry logic
+	for i := 0; i < 3; i++ {
+		if _, err := conn.Write(req); err != nil {
+			return false
+		}
+
+		conn.SetReadDeadline(time.Now().Add(2000 * time.Millisecond))
+		resp := make([]byte, 1024)
+		n, err := conn.Read(resp)
+		if err == nil && n >= 20 {
+			msgType := binary.BigEndian.Uint16(resp[0:2])
+			if msgType == 0x0101 || msgType == 0x0111 {
+				return true
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-	resp := make([]byte, 1024)
-	n, err := conn.Read(resp)
-	if err != nil {
-		return false
-	}
-
-	if n < 20 {
-		return false
-	}
-
-	msgType := binary.BigEndian.Uint16(resp[0:2])
-	return msgType == 0x0101 || msgType == 0x0111
+	return false
 }

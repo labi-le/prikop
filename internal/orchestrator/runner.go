@@ -97,18 +97,18 @@ func definePhases(targetsPath string) []Phase {
 			Gens:    5,
 			Filters: fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", targetsPath),
 		},
-		{
-			Name:    "DISCORD UDP (Voice)",
-			Group:   "discord_udp",
-			Gens:    5,
-			Filters: fmt.Sprintf("--filter-udp=50000-65535,443 --hostlist=%s/discord.txt", targetsPath),
-		},
-		{
-			Name:    "DISCORD UDP (STUN)",
-			Group:   "discord_l7",
-			Gens:    5,
-			Filters: fmt.Sprintf("--filter-udp=19294-19344 --filter-l7=discord,stun --hostlist=%s/discord.txt", targetsPath),
-		},
+		//{
+		//	Name:    "DISCORD UDP (Voice)",
+		//	Group:   "discord_udp",
+		//	Gens:    5,
+		//	Filters: fmt.Sprintf("--filter-udp=50000-65535,443 --hostlist=%s/discord.txt", targetsPath),
+		//},
+		//{
+		//	Name:    "DISCORD UDP (STUN)",
+		//	Group:   "discord_l7",
+		//	Gens:    5,
+		//	Filters: fmt.Sprintf("--filter-udp=19294-19344 --filter-l7=discord,stun --hostlist=%s/discord.txt", targetsPath),
+		//},
 	}
 }
 
@@ -135,9 +135,13 @@ func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []s
 
 		if best != nil {
 			strategyArgs := best.Config.String()
-			fmt.Printf(">>> WINNER: %s\n", strategyArgs)
-			block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
-			finalConfigs = append(finalConfigs, block)
+			if best.Result.SuccessCount > 0 {
+				fmt.Printf(">>> WINNER: %s\n", strategyArgs)
+				block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
+				finalConfigs = append(finalConfigs, block)
+			} else {
+				fmt.Printf(">>> FAILED: Winner had 0 success, discarding. Args: %s\n", strategyArgs)
+			}
 		} else {
 			fmt.Printf(">>> FAILED: No working strategy found for %s\n", p.Name)
 		}

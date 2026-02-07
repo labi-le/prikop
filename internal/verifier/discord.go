@@ -5,7 +5,7 @@ import (
 )
 
 type DiscordVerifier struct {
-	Mode string // discord_tcp, discord_udp
+	Mode string // discord_tcp, discord_udp, discord_l7
 }
 
 func (v *DiscordVerifier) Name() string {
@@ -13,6 +13,7 @@ func (v *DiscordVerifier) Name() string {
 }
 
 func (v *DiscordVerifier) Run(ctx context.Context) CheckResult {
+	// Default TCP targets
 	targets := []Target{
 		{URL: "https://discord.com", Threshold: 5000},
 		{URL: "https://discord.com/assets/b135ff6c8e091b43.mp3", Threshold: 1000},
@@ -25,6 +26,17 @@ func (v *DiscordVerifier) Run(ctx context.Context) CheckResult {
 		targets = []Target{
 			{URL: "https://discord.com", Threshold: 1000, Proto: "quic"},
 			{URL: "https://gateway.discord.gg", Threshold: 1000, Proto: "quic"},
+		}
+	}
+
+	if v.Mode == "discord_l7" {
+		// STUN targets. Format: "ip:port"
+		targets = []Target{
+			{URL: "50.7.85.202:50001", Proto: "stun"},
+			{URL: "50.7.85.202:50002", Proto: "stun"},
+			{URL: "162.159.138.232:443", Proto: "stun"},
+			{URL: "66.22.244.70:50001", Proto: "stun"},
+			{URL: "66.22.244.70:50002", Proto: "stun"},
 		}
 	}
 
