@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	PopulationSize = 50
-	ElitesCount    = 5
+	PopulationSize = 200
+	ElitesCount    = 50
 )
 
 // Evolve принимает результаты прошлого поколения и возвращает новое строго фиксированного размера

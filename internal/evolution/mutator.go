@@ -69,8 +69,8 @@ func (m *Mutator) mutateFake(s *nfqws.Strategy) {
 		s.Fake.TLS = ""
 	}
 
-	mods := []string{"none", "rnd", "rndsni"}
-	s.Fake.Mod = mods[rand.Intn(len(mods))]
+	mods := []string{"", "rnd", "rndsni"}
+	s.Fake.TlsMod = mods[rand.Intn(len(mods))]
 }
 
 func (m *Mutator) mutateSplit(s *nfqws.Strategy) {

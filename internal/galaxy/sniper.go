@@ -22,7 +22,7 @@ func GenerateZeroGeneration(discoveredBins []string) []nfqws.Strategy {
 			Mode:    "fake",
 			Repeats: 4,
 			Fooling: nfqws.FoolingSet{Md5Sig: true, BadSeq: true},
-			Fake:    nfqws.FakeOptions{TLS: binPath, Mod: "rndsni"},
+			Fake:    nfqws.FakeOptions{TLS: binPath, TlsMod: "rndsni"},
 		})
 
 		// Гипотеза B: Fake Quic (если бинарник похож на QUIC, хотя пробуем все)
@@ -30,7 +30,7 @@ func GenerateZeroGeneration(discoveredBins []string) []nfqws.Strategy {
 			Mode:    "fake",
 			Repeats: 4,
 			Fooling: nfqws.FoolingSet{Md5Sig: true},
-			Fake:    nfqws.FakeOptions{Quic: binPath, Mod: "rnd"},
+			Fake:    nfqws.FakeOptions{Quic: binPath, TlsMod: "rnd"},
 		})
 
 		// Гипотеза C: Disorder/Split с этим бинарником как split-pattern (оверлей)
