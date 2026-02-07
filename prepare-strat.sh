@@ -22,6 +22,13 @@ main() {
 
     echo ""
     format_and_replace "$input"
+    echo "# game strat
+--new
+--filter-udp=88,500,1024-19293,19345-49999,50101-65535
+--dpi-desync=fake
+--dpi-desync-cutoff=d2
+--dpi-desync-any-protocol=1
+--dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/quic_initial_www_google_com.bin"
 }
 
 main "$@"
