@@ -1,17 +1,24 @@
 .PHONY: build run
 
+CURRENT_DIR := $(shell pwd)
+
 HOST_SOCKET_DIR ?= /tmp/prikop_sockets
+HOST_TARGETS_DIR ?= $(CURRENT_DIR)/targets
 
 run: build
 	mkdir -p $(HOST_SOCKET_DIR)
+	mkdir -p $(HOST_TARGETS_DIR)
 	chmod 777 $(HOST_SOCKET_DIR)
-	docker run --rm -it \
-		-v /var/run/docker.sock:/var/run/docker.sock \
-		-v $(HOST_SOCKET_DIR):/var/run/prikop \
-		-v ./fake:/app/fake \
-		-e HOST_SOCKET_DIR=$(HOST_SOCKET_DIR) \
-		prikop:latest
+	chmod 777 $(HOST_TARGETS_DIR)
 
+	docker run --rm -it \
+	   -v /var/run/docker.sock:/var/run/docker.sock \
+	   -v $(HOST_SOCKET_DIR):/var/run/prikop \
+	   -v $(HOST_TARGETS_DIR):/app/targets \
+	   -v $(CURRENT_DIR)/fake:/app/fake \
+	   -e HOST_SOCKET_DIR=$(HOST_SOCKET_DIR) \
+	   -e HOST_TARGETS_DIR=$(HOST_TARGETS_DIR) \
+	   prikop:latest
 
 build:
 	docker build -t prikop:latest .

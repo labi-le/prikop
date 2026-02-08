@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -23,16 +24,68 @@ import (
 const (
 	HardTimeout = 5 * time.Second
 	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	// DefaultMinSpeed defines a sane default for throttling detection (e.g., 10KB/s)
+	DefaultMinSpeed = 10 * 1024.0
+
+	HttpBufferSize       = 4096
+	MinDataForSpeedCheck = 1024
+	StunDefaultPort      = ":3478"
+	StunRetries          = 3
+	StunRetryInterval    = 200 * time.Millisecond
+
+	StunTypeBindingRequest  = 0x0001
+	StunMagicCookie         = 0x2112A442
+	StunTypeBindingResponse = 0x0101
+	StunTypeBindingSuccess  = 0x0111
 )
 
-func ExecuteChecks(ctx context.Context, targets []Target) CheckResult {
+type httpClients struct {
+	tcp  *http.Client
+	quic *http.Client
+}
+
+func ExecuteChecks(ctx context.Context, groupName string, targets []Target) CheckResult {
+	fmt.Printf("    [v] Verifying group: %s (%d targets)\n", groupName, len(targets))
+	clients := initClients()
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var passed []string
+	var failed []string
+	errorCounts := make(map[model.FailureReason]int)
+
+	for _, t := range targets {
+		wg.Add(1)
+		go func(tgt Target) {
+			defer wg.Done()
+
+			success, reason := dispatchCheck(ctx, tgt, clients)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if success {
+				passed = append(passed, tgt.URL)
+			} else {
+				failed = append(failed, tgt.URL)
+				if reason != model.ReasonNone {
+					errorCounts[reason]++
+				}
+			}
+		}(t)
+	}
+
+	wg.Wait()
+
+	return summarizeResults(passed, failed, targets, errorCounts)
+}
+
+func initClients() *httpClients {
 	tcpTransport := &http.Transport{
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-		DisableKeepAlives:     true,
-		TLSHandshakeTimeout:   HardTimeout,
-		ResponseHeaderTimeout: HardTimeout,
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DisableKeepAlives: true,
 		DialContext: (&net.Dialer{
-			Timeout: HardTimeout,
+			KeepAlive: HardTimeout,
 		}).DialContext,
 		ForceAttemptHTTP2: true,
 	}
@@ -41,117 +94,132 @@ func ExecuteChecks(ctx context.Context, targets []Target) CheckResult {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
-	tcpClient := &http.Client{Timeout: HardTimeout, Transport: tcpTransport}
-	quicClient := &http.Client{Timeout: HardTimeout, Transport: quicTransport}
+	return &httpClients{
+		tcp:  &http.Client{Transport: tcpTransport},
+		quic: &http.Client{Transport: quicTransport},
+	}
+}
 
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var passed []string
-	var failed []string
-
-	errorCounts := make(map[model.FailureReason]int)
-
-	for _, t := range targets {
-		wg.Add(1)
-
-		go func(tgt Target) {
-			defer wg.Done()
-			success := false
-			var failReason = model.ReasonNone
-
-			defer func() {
-				mu.Lock()
-				if success {
-					passed = append(passed, tgt.URL)
-				} else {
-					failed = append(failed, tgt.URL)
-					if failReason != model.ReasonNone {
-						errorCounts[failReason]++
-					}
-				}
-				mu.Unlock()
-			}()
-
-			if tgt.Proto == "stun" {
-				if checkSTUN(ctx, tgt.URL) {
-					success = true
-				} else {
-					failReason = model.ReasonTimeout
-				}
-				return
-			}
-
-			cli := tcpClient
-			if tgt.Proto == "quic" {
-				cli = quicClient
-			}
-
-			reqCtx, cancel := context.WithTimeout(ctx, HardTimeout)
-			defer cancel()
-
-			req, err := http.NewRequestWithContext(reqCtx, "GET", tgt.URL, nil)
-			if err != nil {
-				return
-			}
-			req.Header.Set("User-Agent", UserAgent)
-
-			resp, err := cli.Do(req)
-			if err != nil {
-				failReason = analyzeError(err)
-				return
-			}
-			defer resp.Body.Close()
-
-			if !tgt.IgnoreStatus && (resp.StatusCode < 200 || resp.StatusCode >= 400) {
-				failReason = model.ReasonReset
-				return
-			}
-
-			buf := make([]byte, 4096)
-			readTotal := 0
-			for readTotal < tgt.Threshold {
-				n, err := resp.Body.Read(buf)
-				if n > 0 {
-					readTotal += n
-				}
-				if err != nil {
-					if err == io.EOF {
-						break
-					}
-					failReason = analyzeError(err)
-					return
-				}
-			}
-
-			if readTotal >= tgt.Threshold {
-				success = true
-			} else {
-				failReason = model.ReasonReset
-			}
-		}(t)
+func dispatchCheck(ctx context.Context, t Target, clients *httpClients) (bool, model.FailureReason) {
+	if t.Timeout == 0 {
+		t.Timeout = HardTimeout
 	}
 
-	wg.Wait()
+	switch t.Proto {
+	case ProtoSTUN:
+		return checkSTUN(ctx, t)
+	case ProtoTCP:
+		return checkHTTP(ctx, t, clients.tcp)
+	case ProtoQUIC:
+		return checkHTTP(ctx, t, clients.quic)
+	default:
+		return false, model.ReasonUnknown
+	}
+}
 
-	finalReason := model.ReasonNone
-	if len(passed) == 0 && len(failed) > 0 {
-		if errorCounts[model.ReasonReset] > 0 {
-			finalReason = model.ReasonReset
-		} else if errorCounts[model.ReasonTimeout] > 0 {
-			finalReason = model.ReasonTimeout
-		} else {
-			finalReason = model.ReasonUnknown
+func checkHTTP(ctx context.Context, t Target, client *http.Client) (bool, model.FailureReason) {
+	// t.Timeout is guaranteed to be set by dispatchCheck
+	reqCtx, cancel := context.WithTimeout(ctx, t.Timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, "GET", t.URL, nil)
+	if err != nil {
+		return false, model.ReasonUnknown
+	}
+	req.Header.Set("User-Agent", UserAgent)
+
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, analyzeError(err)
+	}
+	defer resp.Body.Close()
+
+	if !t.IgnoreStatus && (resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusBadRequest) {
+		return false, model.ReasonReset
+	}
+
+	// Data Transfer Phase
+	buf := make([]byte, HttpBufferSize)
+	readTotal := 0
+
+	for readTotal < t.Threshold {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			readTotal += n
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return false, analyzeError(err)
 		}
 	}
 
-	return CheckResult{
-		Success:       len(passed) > 0,
-		SuccessCount:  len(passed),
-		TotalCount:    len(targets),
-		PassedUrls:    passed,
-		FailedUrls:    failed,
-		FailureReason: finalReason,
+	if readTotal < t.Threshold {
+		return false, model.ReasonReset
 	}
+
+	// Speed Check
+	totalTime := time.Since(start).Seconds()
+	if totalTime > 0 {
+		speed := float64(readTotal) / totalTime
+
+		minSpeed := t.MinSpeed
+		if minSpeed == 0 {
+			minSpeed = DefaultMinSpeed // Apply default if not specified to catch obvious throttles
+		}
+
+		if speed < minSpeed {
+			// Check if we actually downloaded enough to justify a speed check
+			if readTotal > MinDataForSpeedCheck {
+				return false, model.ReasonThrottle
+			}
+		}
+	}
+
+	return true, model.ReasonNone
+}
+
+func checkSTUN(ctx context.Context, t Target) (bool, model.FailureReason) {
+	address := strings.TrimPrefix(t.URL, "https://")
+	address = strings.TrimPrefix(address, "http://")
+	if !strings.Contains(address, ":") {
+		address += StunDefaultPort
+	}
+
+	d := net.Dialer{Timeout: t.Timeout}
+	conn, err := d.DialContext(ctx, "udp", address)
+	if err != nil {
+		return false, model.ReasonTimeout
+	}
+	defer conn.Close()
+
+	req := make([]byte, 20)
+	binary.BigEndian.PutUint16(req[0:2], StunTypeBindingRequest)
+	binary.BigEndian.PutUint16(req[2:4], 0x0000) // Length
+	binary.BigEndian.PutUint32(req[4:8], StunMagicCookie)
+	rand.Read(req[8:20]) // Transaction ID
+
+	// Retry logic
+	for i := 0; i < StunRetries; i++ {
+		if _, err := conn.Write(req); err != nil {
+			return false, model.ReasonTimeout
+		}
+
+		conn.SetReadDeadline(time.Now().Add(t.Timeout))
+		resp := make([]byte, 1024)
+		n, err := conn.Read(resp)
+		if err == nil && n >= 20 {
+			msgType := binary.BigEndian.Uint16(resp[0:2])
+			if msgType == StunTypeBindingResponse || msgType == StunTypeBindingSuccess {
+				return true, model.ReasonNone
+			}
+		}
+		time.Sleep(StunRetryInterval)
+	}
+
+	return false, model.ReasonTimeout
 }
 
 func analyzeError(err error) model.FailureReason {
@@ -188,46 +256,34 @@ func analyzeError(err error) model.FailureReason {
 		return model.ReasonReset
 	}
 
+	// QUIC/HTTP3 specific errors
+	if strings.Contains(err.Error(), "Application error 0x0") { // H3_NO_ERROR usually treated as clean close, but context matters
+		return model.ReasonReset
+	}
+
 	return model.ReasonUnknown
 }
 
-func checkSTUN(ctx context.Context, address string) bool {
-	address = strings.TrimPrefix(address, "https://")
-	address = strings.TrimPrefix(address, "http://")
-	if !strings.Contains(address, ":") {
-		address += ":3478"
-	}
-
-	d := net.Dialer{Timeout: 2 * time.Second}
-	conn, err := d.DialContext(ctx, "udp", address)
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-
-	req := make([]byte, 20)
-	binary.BigEndian.PutUint16(req[0:2], 0x0001)     // Type
-	binary.BigEndian.PutUint16(req[2:4], 0x0000)     // Length
-	binary.BigEndian.PutUint32(req[4:8], 0x2112A442) // Magic Cookie
-	rand.Read(req[8:20])                             // Transaction ID
-
-	// Retry logic
-	for i := 0; i < 3; i++ {
-		if _, err := conn.Write(req); err != nil {
-			return false
+func summarizeResults(passed, failed []string, targets []Target, errorCounts map[model.FailureReason]int) CheckResult {
+	finalReason := model.ReasonNone
+	if len(passed) == 0 && len(failed) > 0 {
+		if errorCounts[model.ReasonReset] > 0 {
+			finalReason = model.ReasonReset
+		} else if errorCounts[model.ReasonThrottle] > 0 {
+			finalReason = model.ReasonThrottle
+		} else if errorCounts[model.ReasonTimeout] > 0 {
+			finalReason = model.ReasonTimeout
+		} else {
+			finalReason = model.ReasonUnknown
 		}
-
-		conn.SetReadDeadline(time.Now().Add(2000 * time.Millisecond))
-		resp := make([]byte, 1024)
-		n, err := conn.Read(resp)
-		if err == nil && n >= 20 {
-			msgType := binary.BigEndian.Uint16(resp[0:2])
-			if msgType == 0x0101 || msgType == 0x0111 {
-				return true
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
 	}
 
-	return false
+	return CheckResult{
+		Success:       len(passed) > 0,
+		SuccessCount:  len(passed),
+		TotalCount:    len(targets),
+		PassedUrls:    passed,
+		FailedUrls:    failed,
+		FailureReason: finalReason,
+	}
 }

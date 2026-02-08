@@ -15,7 +15,6 @@ func main() {
 
 	var cfg orchestrator.Config
 	flag.StringVar(&cfg.FakePath, "fake-path", "/app/fake", "Path to bins")
-	flag.StringVar(&cfg.TargetsPath, "targets-path", "/app/targets", "Path to targets")
 
 	flag.Parse()
 

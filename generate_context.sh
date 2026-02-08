@@ -38,6 +38,7 @@ get_syntax() {
     case "$filename" in
         *.go) echo "go" ;;
         *.txt) echo "txt" ;;
+        *.json) echo "json" ;;
         *.yaml|*.yml) echo "yaml" ;;
         *.proto) echo "protobuf" ;;
         *.nix) echo "nix" ;;
@@ -101,6 +102,7 @@ print_files() {
         -name "*.txt" -o \
         -name "*.yml" -o \
         -name "*.php" -o \
+        -name "*.json" -o \
         -name "*.c" -o \
         -name "*.h" -o \
         -name "*.xml" -o \

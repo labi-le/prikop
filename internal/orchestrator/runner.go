@@ -12,13 +12,13 @@ import (
 	"prikop/internal/container"
 	"prikop/internal/model"
 	"prikop/internal/recon"
+	"prikop/internal/verifier"
 
 	"github.com/moby/moby/client"
 )
 
 type Config struct {
-	FakePath    string
-	TargetsPath string
+	FakePath string
 }
 
 type Phase struct {
@@ -29,6 +29,8 @@ type Phase struct {
 }
 
 var pool *container.WorkerPool
+
+const HostListPath = "/app/targets"
 
 func Run(cfg Config) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -45,7 +47,13 @@ func Run(cfg Config) {
 		hostSockDir = "/tmp/prikop_sockets"
 	}
 
-	pool = container.NewWorkerPool(ctx, cli, model.MaxWorkers, hostSockDir)
+	hostTargetsDir := os.Getenv("HOST_TARGETS_DIR")
+	if hostTargetsDir == "" {
+		hostTargetsDir = "/tmp/prikop_targets"
+		_ = os.MkdirAll(hostTargetsDir, 0777)
+	}
+
+	pool = container.NewWorkerPool(ctx, cli, model.MaxWorkers, hostSockDir, hostTargetsDir)
 
 	if err := pool.Start(); err != nil {
 		log.Fatalf("Worker pool start failed: %v", err)
@@ -56,7 +64,7 @@ func Run(cfg Config) {
 	}()
 
 	fmt.Println(">>> RUNNING GLOBAL RECONNAISSANCE")
-	report := recon.RunScout(ctx, pool, "google")
+	report := recon.RunScout(ctx, pool, "google_tcp")
 	if ctx.Err() != nil {
 		return
 	}
@@ -71,77 +79,85 @@ func Run(cfg Config) {
 	}
 	fmt.Printf(">>> Found %d bin files\n", len(discoveredBins))
 
-	phases := definePhases(cfg.TargetsPath)
+	// Load providers using static definitions
+	providers, err := verifier.InitializeProviders(true)
+	if err != nil {
+		fmt.Printf("Warning: failed to initialize providers: %v\n", err)
+	}
+	fmt.Printf(">>> Initialized %d providers definitions\n", len(providers))
+
+	phases := definePhases(providers)
 	optimizer := NewOptimizer(pool)
 
 	executePhases(ctx, optimizer, phases, discoveredBins, report)
 }
 
-func definePhases(targetsPath string) []Phase {
-	return []Phase{
-		{
-			Name:    "GENERAL TCP (TCP 16-20 Checker)",
-			Group:   "general",
-			Gens:    20,
-			Filters: "--filter-tcp=80,443",
-		},
-		{
-			Name:    "GOOGLE TCP",
-			Group:   "google_tcp",
-			Gens:    5,
-			Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", targetsPath),
-		},
-		{
-			Name:    "GOOGLE UDP (QUIC)",
-			Group:   "google_udp",
-			Gens:    5,
-			Filters: fmt.Sprintf("--filter-udp=443 --hostlist=%s/google.txt", targetsPath),
-		},
-		//{
-		//	Name:    "DISCORD UDP (Voice)",
-		//	Group:   "discord_udp",
-		//	Gens:    5,
-		//	Filters: fmt.Sprintf("--filter-udp=50000-65535,443 --hostlist=%s/discord.txt", targetsPath),
-		//},
-		//{
-		//	Name:    "DISCORD UDP (STUN)",
-		//	Group:   "discord_l7",
-		//	Gens:    5,
-		//	Filters: fmt.Sprintf("--filter-udp=19294-19344 --filter-l7=discord,stun --hostlist=%s/discord.txt", targetsPath),
-		//},
+func definePhases(providers []verifier.ProviderDefinition) []Phase {
+	var phases []Phase
+
+	// 1. Core Phases
+	phases = append(phases, Phase{
+		Name:    "GOOGLE TCP",
+		Group:   "google_tcp",
+		Gens:    5,
+		Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", HostListPath),
+	})
+
+	//// FIX: Add strict L7 filter to avoid processing Torrent DHT garbage
+	phases = append(phases, Phase{
+		Name:    "GOOGLE UDP (QUIC)",
+		Group:   "google_udp",
+		Gens:    5,
+		Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
+	})
+
+	// 2. Dynamic Provider Phases
+	for _, p := range providers {
+		filters := "--filter-tcp=80,443"
+
+		if p.CIDRFile != "" {
+			filters += fmt.Sprintf(" --ipset=%s", p.CIDRFile)
+		} else {
+			fmt.Printf("Warning: Provider %s has no CIDR file, skipping specific filters\n", p.Name)
+		}
+
+		// Fallback/Default for missing Gens in existing/new definitions
+		gens := p.Gens
+		if gens == 0 {
+			gens = 5
+		}
+
+		phases = append(phases, Phase{
+			Name:    fmt.Sprintf("PROVIDER: %s", strings.ToUpper(p.Name)),
+			Group:   p.Name,
+			Gens:    gens,
+			Filters: filters,
+		})
 	}
+
+	return phases
 }
 
 func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []string, report model.ReconReport) {
 	var finalConfigs []string
 
 	for _, p := range phases {
-		// CHECKPOINT: Check before starting phase
 		if ctx.Err() != nil {
-			fmt.Println("\n>>> Process aborted by user.")
 			return
 		}
 
 		fmt.Printf("\n>>> PHASE: %s\n", p.Name)
-		fmt.Printf(">>> Filters: %s\n", p.Filters)
 
-		best := opt.RunPhase(ctx, p.Group, bins, p.Gens, report)
-
-		// Check cancellation return
+		best := opt.RunPhase(ctx, p.Group, bins, p.Gens, report, p.Filters)
 		if ctx.Err() != nil {
-			fmt.Println("\n>>> Process aborted by user.")
 			return
 		}
 
-		if best != nil {
+		if best != nil && best.Result.SuccessCount > 0 {
 			strategyArgs := best.Config.String()
-			if best.Result.SuccessCount > 0 {
-				fmt.Printf(">>> WINNER: %s\n", strategyArgs)
-				block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
-				finalConfigs = append(finalConfigs, block)
-			} else {
-				fmt.Printf(">>> FAILED: Winner had 0 success, discarding. Args: %s\n", strategyArgs)
-			}
+			fmt.Printf(">>> WINNER: %s\n", strategyArgs)
+			block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
+			finalConfigs = append(finalConfigs, block)
 		} else {
 			fmt.Printf(">>> FAILED: No working strategy found for %s\n", p.Name)
 		}

@@ -7,13 +7,13 @@ import (
 
 // Strategy describes the nfqws arguments genome
 type Strategy struct {
-	Mode        string // --dpi-desync
-	Repeats     int    // --dpi-desync-repeats
-	AnyProtocol bool   // --dpi-desync-any-protocol
-	SkipNoSNI   bool   // --dpi-desync-skip-nosni
-	Cutoff      string // --dpi-desync-cutoff
-	Start       string // --dpi-desync-start
-	FwMark      string // --dpi-desync-fwmark
+	Mode        string
+	Repeats     int
+	AnyProtocol bool
+	SkipNoSNI   bool
+	Cutoff      string
+	Start       string
+	FwMark      string
 
 	Fooling  FoolingSet
 	Fake     FakeOptions
@@ -56,17 +56,15 @@ type FakeOptions struct {
 }
 
 type SplitOptions struct {
-	Pos     string // --dpi-desync-split-pos
-	SeqOvl  int    // --dpi-desync-split-seqovl
-	Pattern string // --dpi-desync-split-seqovl-pattern
+	Pos     string
+	SeqOvl  int
+	Pattern string
 
-	// Fakedsplit specific
-	FakedPattern string // --dpi-desync-fakedsplit-pattern
-	FakedMod     string // --dpi-desync-fakedsplit-mod
+	FakedPattern string
+	FakedMod     string
 
-	// Hostfakesplit specific
-	HostMid string // --dpi-desync-hostfakesplit-midhost
-	HostMod string // --dpi-desync-hostfakesplit-mod
+	HostMid string
+	HostMod string
 
 	IpFragPosTcp int
 	IpFragPosUdp int
@@ -136,6 +134,82 @@ type TcpFlagsOptions struct {
 	Unset string
 }
 
+const (
+	ArgDpiDesync               = "--dpi-desync"
+	ArgDpiDesyncRepeats        = "--dpi-desync-repeats"
+	ArgDpiDesyncAnyProtocol    = "--dpi-desync-any-protocol"
+	ArgDpiDesyncSkipNoSNI      = "--dpi-desync-skip-nosni"
+	ArgDpiDesyncCutoff         = "--dpi-desync-cutoff"
+	ArgDpiDesyncStart          = "--dpi-desync-start"
+	ArgDpiDesyncFwmark         = "--dpi-desync-fwmark"
+	ArgDpiDesyncFooling        = "--dpi-desync-fooling"
+	ArgDpiDesyncBadSeqInc      = "--dpi-desync-badseq-increment"
+	ArgDpiDesyncBadAckInc      = "--dpi-desync-badack-increment"
+	ArgDpiDesyncTsInc          = "--dpi-desync-ts-increment"
+	ArgDpiDesyncFakeTls        = "--dpi-desync-fake-tls"
+	ArgDpiDesyncFakeQuic       = "--dpi-desync-fake-quic"
+	ArgDpiDesyncFakeHttp       = "--dpi-desync-fake-http"
+	ArgDpiDesyncFakeWireguard  = "--dpi-desync-fake-wireguard"
+	ArgDpiDesyncFakeDht        = "--dpi-desync-fake-dht"
+	ArgDpiDesyncFakeDiscord    = "--dpi-desync-fake-discord"
+	ArgDpiDesyncFakeStun       = "--dpi-desync-fake-stun"
+	ArgDpiDesyncFakeUnknownUdp = "--dpi-desync-fake-unknown-udp"
+	ArgDpiDesyncFakeUnknown    = "--dpi-desync-fake-unknown"
+	ArgDpiDesyncFakeSynData    = "--dpi-desync-fake-syndata"
+	ArgDpiDesyncFakeTlsMod     = "--dpi-desync-fake-tls-mod"
+	ArgDpiDesyncFakeTcpMod     = "--dpi-desync-fake-tcp-mod"
+	ArgDpiDesyncSplitPos       = "--dpi-desync-split-pos"
+	ArgDpiDesyncSplitSeqOvl    = "--dpi-desync-split-seqovl"
+	ArgDpiDesyncSplitPattern   = "--dpi-desync-split-seqovl-pattern"
+	ArgDpiDesyncFakedPattern   = "--dpi-desync-fakedsplit-pattern"
+	ArgDpiDesyncFakedMod       = "--dpi-desync-fakedsplit-mod"
+	ArgDpiDesyncHostFakeMid    = "--dpi-desync-hostfakesplit-midhost"
+	ArgDpiDesyncHostFakeMod    = "--dpi-desync-hostfakesplit-mod"
+	ArgDpiDesyncIpFragPosTcp   = "--dpi-desync-ipfrag-pos-tcp"
+	ArgDpiDesyncIpFragPosUdp   = "--dpi-desync-ipfrag-pos-udp"
+	ArgDpiDesyncUdpLenInc      = "--dpi-desync-udplen-increment"
+	ArgDpiDesyncUdpLenPattern  = "--dpi-desync-udplen-pattern"
+	ArgDpiDesyncTTL            = "--dpi-desync-ttl"
+	ArgDpiDesyncTTL6           = "--dpi-desync-ttl6"
+	ArgDpiDesyncAutoTTL        = "--dpi-desync-autottl"
+	ArgDpiDesyncAutoTTL6       = "--dpi-desync-autottl6"
+	ArgDpiDesyncTcpFlagsSet    = "--dpi-desync-tcp-flags-set"
+	ArgDpiDesyncTcpFlagsUnset  = "--dpi-desync-tcp-flags-unset"
+	ArgWSSize                  = "--wssize"
+	ArgWSSizeCutoff            = "--wssize-cutoff"
+	ArgWSSizeForcedCutoff      = "--wssize-forced-cutoff"
+	ArgHostCase                = "--hostcase"
+	ArgHostSpell               = "--hostspell"
+	ArgHostNoSpace             = "--hostnospace"
+	ArgDomCase                 = "--domcase"
+	ArgMethodEol               = "--methodeol"
+	ArgIpId                    = "--ip-id"
+	ArgSynAckSplit             = "--synack-split"
+	ArgDup                     = "--dup"
+	ArgDupReplace              = "--dup-replace"
+	ArgDupTTL                  = "--dup-ttl"
+	ArgDupTTL6                 = "--dup-ttl6"
+	ArgDupAutoTTL              = "--dup-autottl"
+	ArgDupAutoTTL6             = "--dup-autottl6"
+	ArgDupFooling              = "--dup-fooling"
+	ArgDupTsInc                = "--dup-ts-increment"
+	ArgDupBadSeqInc            = "--dup-badseq-increment"
+	ArgDupBadAckInc            = "--dup-badack-increment"
+	ArgDupIpId                 = "--dup-ip-id"
+	ArgDupStart                = "--dup-start"
+	ArgDupCutoff               = "--dup-cutoff"
+	ArgDupTcpFlagsSet          = "--dup-tcp-flags-set"
+	ArgDupTcpFlagsUnset        = "--dup-tcp-flags-unset"
+	ArgOrigTTL                 = "--orig-ttl"
+	ArgOrigTTL6                = "--orig-ttl6"
+	ArgOrigAutoTTL             = "--orig-autottl"
+	ArgOrigAutoTTL6            = "--orig-autottl6"
+	ArgOrigModStart            = "--orig-mod-start"
+	ArgOrigModCutoff           = "--orig-mod-cutoff"
+	ArgOrigTcpFlagsSet         = "--orig-tcp-flags-set"
+	ArgOrigTcpFlagsUnset       = "--orig-tcp-flags-unset"
+)
+
 func (s Strategy) String() string {
 	return strings.Join(s.ToArgs(), " ")
 }
@@ -157,312 +231,239 @@ func (s Strategy) ToArgs() []string {
 	return args
 }
 
+func addArg(args []string, flag, value string) []string {
+	if value != "" {
+		return append(args, fmt.Sprintf("%s=%s", flag, value))
+	}
+	return args
+}
+
+func addArgInt(args []string, flag string, value int) []string {
+	if value != 0 {
+		return append(args, fmt.Sprintf("%s=%d", flag, value))
+	}
+	return args
+}
+
 func (s Strategy) argsMain() []string {
 	var args []string
-	if s.Mode != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync=%s", s.Mode))
-	}
+	args = addArg(args, ArgDpiDesync, s.Mode)
 	if s.Repeats > 1 {
-		args = append(args, fmt.Sprintf("--dpi-desync-repeats=%d", s.Repeats))
+		args = append(args, fmt.Sprintf("%s=%d", ArgDpiDesyncRepeats, s.Repeats))
 	}
 	if s.AnyProtocol {
-		// FIXED: Explicitly set =1 to match help syntax "0|1"
-		args = append(args, "--dpi-desync-any-protocol=1")
+		args = append(args, ArgDpiDesyncAnyProtocol+"=1")
 	}
 	if s.SkipNoSNI {
-		args = append(args, "--dpi-desync-skip-nosni=1")
+		args = append(args, ArgDpiDesyncSkipNoSNI+"=1")
 	}
-	if s.Cutoff != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-cutoff=%s", s.Cutoff))
-	}
-	if s.Start != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-start=%s", s.Start))
-	}
-	if s.FwMark != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fwmark=%s", s.FwMark))
-	}
+	args = addArg(args, ArgDpiDesyncCutoff, s.Cutoff)
+	args = addArg(args, ArgDpiDesyncStart, s.Start)
+	args = addArg(args, ArgDpiDesyncFwmark, s.FwMark)
 	return args
 }
 
 func (s Strategy) argsFooling() []string {
 	var args []string
 	var flags []string
-	if s.Fooling.Md5Sig {
+	f := s.Fooling
+	if f.Md5Sig {
 		flags = append(flags, "md5sig")
 	}
-	if s.Fooling.BadSum {
+	if f.BadSum {
 		flags = append(flags, "badsum")
 	}
-	if s.Fooling.BadSeq {
+	if f.BadSeq {
 		flags = append(flags, "badseq")
 	}
-	if s.Fooling.Ts {
+	if f.Ts {
 		flags = append(flags, "ts")
 	}
-	if s.Fooling.Datanoack {
+	if f.Datanoack {
 		flags = append(flags, "datanoack")
 	}
-	if s.Fooling.HopByHop {
+	if f.HopByHop {
 		flags = append(flags, "hopbyhop")
 	}
-	if s.Fooling.HopByHop2 {
+	if f.HopByHop2 {
 		flags = append(flags, "hopbyhop2")
 	}
 	if len(flags) > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-fooling=%s", strings.Join(flags, ",")))
+		args = append(args, fmt.Sprintf("%s=%s", ArgDpiDesyncFooling, strings.Join(flags, ",")))
 	}
-	if s.Fooling.BadSeqIncrement != 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-badseq-increment=%d", s.Fooling.BadSeqIncrement))
-	}
-	if s.Fooling.BadAckIncrement != 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-badack-increment=%d", s.Fooling.BadAckIncrement))
-	}
-	if s.Fooling.TsIncrement != 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-ts-increment=%d", s.Fooling.TsIncrement))
-	}
+	args = addArgInt(args, ArgDpiDesyncBadSeqInc, f.BadSeqIncrement)
+	args = addArgInt(args, ArgDpiDesyncBadAckInc, f.BadAckIncrement)
+	args = addArgInt(args, ArgDpiDesyncTsInc, f.TsIncrement)
 	return args
 }
 
 func (s Strategy) argsFake() []string {
 	var args []string
-	if s.Fake.TLS != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-tls=%s", s.Fake.TLS))
-	}
-	if s.Fake.Quic != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-quic=%s", s.Fake.Quic))
-	}
-	if s.Fake.Http != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-http=%s", s.Fake.Http))
-	}
-	if s.Fake.Wireguard != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-wireguard=%s", s.Fake.Wireguard))
-	}
-	if s.Fake.Dht != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-dht=%s", s.Fake.Dht))
-	}
-	if s.Fake.Discord != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-discord=%s", s.Fake.Discord))
-	}
-	if s.Fake.Stun != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-stun=%s", s.Fake.Stun))
-	}
-	if s.Fake.UnknownUdp != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-unknown-udp=%s", s.Fake.UnknownUdp))
-	}
-	if s.Fake.Unknown != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-unknown=%s", s.Fake.Unknown))
-	}
-	if s.Fake.SynData != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-syndata=%s", s.Fake.SynData))
-	}
-	if s.Fake.TlsMod != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-tls-mod=%s", s.Fake.TlsMod))
-	}
-	if s.Fake.TcpMod != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-fake-tcp-mod=%s", s.Fake.TcpMod))
-	}
+	f := s.Fake
+	args = addArg(args, ArgDpiDesyncFakeTls, f.TLS)
+	args = addArg(args, ArgDpiDesyncFakeQuic, f.Quic)
+	args = addArg(args, ArgDpiDesyncFakeHttp, f.Http)
+	args = addArg(args, ArgDpiDesyncFakeWireguard, f.Wireguard)
+	args = addArg(args, ArgDpiDesyncFakeDht, f.Dht)
+	args = addArg(args, ArgDpiDesyncFakeDiscord, f.Discord)
+	args = addArg(args, ArgDpiDesyncFakeStun, f.Stun)
+	args = addArg(args, ArgDpiDesyncFakeUnknownUdp, f.UnknownUdp)
+	args = addArg(args, ArgDpiDesyncFakeUnknown, f.Unknown)
+	args = addArg(args, ArgDpiDesyncFakeSynData, f.SynData)
+	args = addArg(args, ArgDpiDesyncFakeTlsMod, f.TlsMod)
+	args = addArg(args, ArgDpiDesyncFakeTcpMod, f.TcpMod)
 	return args
 }
 
 func (s Strategy) argsSplit() []string {
 	var args []string
-	if s.Split.Pos != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-split-pos=%s", s.Split.Pos))
+	sp := s.Split
+	args = addArg(args, ArgDpiDesyncSplitPos, sp.Pos)
+	if sp.SeqOvl > 0 {
+		args = addArgInt(args, ArgDpiDesyncSplitSeqOvl, sp.SeqOvl)
 	}
-	if s.Split.SeqOvl > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-split-seqovl=%d", s.Split.SeqOvl))
-	}
-	if s.Split.Pattern != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-split-seqovl-pattern=%s", s.Split.Pattern))
-	}
+	args = addArg(args, ArgDpiDesyncSplitPattern, sp.Pattern)
 
 	if strings.Contains(s.Mode, "fakedsplit") || strings.Contains(s.Mode, "fakeddisorder") {
-		if s.Split.FakedPattern != "" {
-			args = append(args, fmt.Sprintf("--dpi-desync-fakedsplit-pattern=%s", s.Split.FakedPattern))
-		}
-		if s.Split.FakedMod != "" {
-			args = append(args, fmt.Sprintf("--dpi-desync-fakedsplit-mod=%s", s.Split.FakedMod))
-		}
+		args = addArg(args, ArgDpiDesyncFakedPattern, sp.FakedPattern)
+		args = addArg(args, ArgDpiDesyncFakedMod, sp.FakedMod)
 	}
 
 	if strings.Contains(s.Mode, "hostfakesplit") {
-		if s.Split.HostMid != "" {
-			args = append(args, fmt.Sprintf("--dpi-desync-hostfakesplit-midhost=%s", s.Split.HostMid))
-		}
-		if s.Split.HostMod != "" {
-			args = append(args, fmt.Sprintf("--dpi-desync-hostfakesplit-mod=%s", s.Split.HostMod))
-		}
+		args = addArg(args, ArgDpiDesyncHostFakeMid, sp.HostMid)
+		args = addArg(args, ArgDpiDesyncHostFakeMod, sp.HostMod)
 	}
 
-	if s.Split.IpFragPosTcp > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-ipfrag-pos-tcp=%d", s.Split.IpFragPosTcp))
+	if sp.IpFragPosTcp > 0 {
+		args = addArgInt(args, ArgDpiDesyncIpFragPosTcp, sp.IpFragPosTcp)
 	}
-	if s.Split.IpFragPosUdp > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-ipfrag-pos-udp=%d", s.Split.IpFragPosUdp))
+	if sp.IpFragPosUdp > 0 {
+		args = addArgInt(args, ArgDpiDesyncIpFragPosUdp, sp.IpFragPosUdp)
 	}
 	return args
 }
 
 func (s Strategy) argsUdpLen() []string {
 	var args []string
-	if s.UdpLen.Increment != 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-udplen-increment=%d", s.UdpLen.Increment))
-	}
-	if s.UdpLen.Pattern != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-udplen-pattern=%s", s.UdpLen.Pattern))
-	}
+	args = addArgInt(args, ArgDpiDesyncUdpLenInc, s.UdpLen.Increment)
+	args = addArg(args, ArgDpiDesyncUdpLenPattern, s.UdpLen.Pattern)
 	return args
 }
 
 func (s Strategy) argsTTL() []string {
 	var args []string
-	if s.TTL.Fixed > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-ttl=%d", s.TTL.Fixed))
+	t := s.TTL
+	if t.Fixed > 0 {
+		args = addArgInt(args, ArgDpiDesyncTTL, t.Fixed)
 	}
-	if s.TTL.Fixed6 > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-ttl6=%d", s.TTL.Fixed6))
+	if t.Fixed6 > 0 {
+		args = addArgInt(args, ArgDpiDesyncTTL6, t.Fixed6)
 	}
-	if s.TTL.AutoStr != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-autottl=%s", s.TTL.AutoStr))
-	} else if s.TTL.Auto > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-autottl=%d", s.TTL.Auto))
+	if t.AutoStr != "" {
+		args = addArg(args, ArgDpiDesyncAutoTTL, t.AutoStr)
+	} else if t.Auto > 0 {
+		args = addArgInt(args, ArgDpiDesyncAutoTTL, t.Auto)
 	}
-	if s.TTL.Auto6 > 0 {
-		args = append(args, fmt.Sprintf("--dpi-desync-autottl6=%d", s.TTL.Auto6))
+	if t.Auto6 > 0 {
+		args = addArgInt(args, ArgDpiDesyncAutoTTL6, t.Auto6)
 	}
 	return args
 }
 
 func (s Strategy) argsTcpFlags() []string {
 	var args []string
-	if s.TcpFlags.Set != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-tcp-flags-set=%s", s.TcpFlags.Set))
-	}
-	if s.TcpFlags.Unset != "" {
-		args = append(args, fmt.Sprintf("--dpi-desync-tcp-flags-unset=%s", s.TcpFlags.Unset))
-	}
+	args = addArg(args, ArgDpiDesyncTcpFlagsSet, s.TcpFlags.Set)
+	args = addArg(args, ArgDpiDesyncTcpFlagsUnset, s.TcpFlags.Unset)
 	return args
 }
 
 func (s Strategy) argsWSS() []string {
 	var args []string
-	if s.WSS.Enabled || s.WSS.Value != "" {
-		val := s.WSS.Value
+	w := s.WSS
+	if w.Enabled || w.Value != "" {
+		val := w.Value
 		if val == "" {
 			val = "1:6"
 		}
-		args = append(args, fmt.Sprintf("--wssize=%s", val))
+		args = append(args, fmt.Sprintf("%s=%s", ArgWSSize, val))
 	}
-	if s.WSS.Cutoff != "" {
-		args = append(args, fmt.Sprintf("--wssize-cutoff=%s", s.WSS.Cutoff))
-	}
-	if s.WSS.ForcedCutoff {
-		args = append(args, "--wssize-forced-cutoff=1")
+	args = addArg(args, ArgWSSizeCutoff, w.Cutoff)
+	if w.ForcedCutoff {
+		args = append(args, ArgWSSizeForcedCutoff+"=1")
 	}
 	return args
 }
 
 func (s Strategy) argsTamper() []string {
 	var args []string
-	if s.Tamper.HostCase {
-		args = append(args, "--hostcase")
+	t := s.Tamper
+	if t.HostCase {
+		args = append(args, ArgHostCase)
 	}
-	if s.Tamper.HostSpell != "" {
-		args = append(args, "--hostspell="+s.Tamper.HostSpell)
+	if t.HostSpell != "" {
+		args = append(args, ArgHostSpell+"="+t.HostSpell)
 	}
-	if s.Tamper.HostNoSpace {
-		args = append(args, "--hostnospace")
+	if t.HostNoSpace {
+		args = append(args, ArgHostNoSpace)
 	}
-	if s.Tamper.DomCase {
-		args = append(args, "--domcase")
+	if t.DomCase {
+		args = append(args, ArgDomCase)
 	}
-	if s.Tamper.MethodEol {
-		args = append(args, "--methodeol")
+	if t.MethodEol {
+		args = append(args, ArgMethodEol)
 	}
-	if s.Tamper.IpId != "" {
-		args = append(args, "--ip-id="+s.Tamper.IpId)
+	if t.IpId != "" {
+		args = append(args, ArgIpId+"="+t.IpId)
 	}
-	if s.Tamper.SynAckSplit != "" {
-		args = append(args, "--synack-split="+s.Tamper.SynAckSplit)
+	if t.SynAckSplit != "" {
+		args = append(args, ArgSynAckSplit+"="+t.SynAckSplit)
 	}
 	return args
 }
 
 func (s Strategy) argsDup() []string {
 	var args []string
-	if s.Dup.Count > 0 {
-		args = append(args, fmt.Sprintf("--dup=%d", s.Dup.Count))
+	d := s.Dup
+	if d.Count > 0 {
+		args = addArgInt(args, ArgDup, d.Count)
 	}
-	if s.Dup.Replace {
-		args = append(args, "--dup-replace=1")
+	if d.Replace {
+		args = append(args, ArgDupReplace+"=1")
 	}
-	if s.Dup.TTL > 0 {
-		args = append(args, fmt.Sprintf("--dup-ttl=%d", s.Dup.TTL))
+	if d.TTL > 0 {
+		args = addArgInt(args, ArgDupTTL, d.TTL)
 	}
-	if s.Dup.TTL6 > 0 {
-		args = append(args, fmt.Sprintf("--dup-ttl6=%d", s.Dup.TTL6))
+	if d.TTL6 > 0 {
+		args = addArgInt(args, ArgDupTTL6, d.TTL6)
 	}
-	if s.Dup.AutoTTL != "" {
-		args = append(args, fmt.Sprintf("--dup-autottl=%s", s.Dup.AutoTTL))
-	}
-	if s.Dup.AutoTTL6 != "" {
-		args = append(args, fmt.Sprintf("--dup-autottl6=%s", s.Dup.AutoTTL6))
-	}
-	if s.Dup.Fooling != "" {
-		args = append(args, fmt.Sprintf("--dup-fooling=%s", s.Dup.Fooling))
-	}
-	if s.Dup.TsIncrement != 0 {
-		args = append(args, fmt.Sprintf("--dup-ts-increment=%d", s.Dup.TsIncrement))
-	}
-	if s.Dup.BadSeqIncrement != 0 {
-		args = append(args, fmt.Sprintf("--dup-badseq-increment=%d", s.Dup.BadSeqIncrement))
-	}
-	if s.Dup.BadAckIncrement != 0 {
-		args = append(args, fmt.Sprintf("--dup-badack-increment=%d", s.Dup.BadAckIncrement))
-	}
-	if s.Dup.IpId != "" {
-		args = append(args, fmt.Sprintf("--dup-ip-id=%s", s.Dup.IpId))
-	}
-	if s.Dup.Start != "" {
-		args = append(args, fmt.Sprintf("--dup-start=%s", s.Dup.Start))
-	}
-	if s.Dup.Cutoff != "" {
-		args = append(args, fmt.Sprintf("--dup-cutoff=%s", s.Dup.Cutoff))
-	}
-	if s.Dup.TcpFlagsSet != "" {
-		args = append(args, fmt.Sprintf("--dup-tcp-flags-set=%s", s.Dup.TcpFlagsSet))
-	}
-	if s.Dup.TcpFlagsUnset != "" {
-		args = append(args, fmt.Sprintf("--dup-tcp-flags-unset=%s", s.Dup.TcpFlagsUnset))
-	}
+	args = addArg(args, ArgDupAutoTTL, d.AutoTTL)
+	args = addArg(args, ArgDupAutoTTL6, d.AutoTTL6)
+	args = addArg(args, ArgDupFooling, d.Fooling)
+	args = addArgInt(args, ArgDupTsInc, d.TsIncrement)
+	args = addArgInt(args, ArgDupBadSeqInc, d.BadSeqIncrement)
+	args = addArgInt(args, ArgDupBadAckInc, d.BadAckIncrement)
+	args = addArg(args, ArgDupIpId, d.IpId)
+	args = addArg(args, ArgDupStart, d.Start)
+	args = addArg(args, ArgDupCutoff, d.Cutoff)
+	args = addArg(args, ArgDupTcpFlagsSet, d.TcpFlagsSet)
+	args = addArg(args, ArgDupTcpFlagsUnset, d.TcpFlagsUnset)
 	return args
 }
 
 func (s Strategy) argsOrig() []string {
 	var args []string
-	if s.Orig.TTL > 0 {
-		args = append(args, fmt.Sprintf("--orig-ttl=%d", s.Orig.TTL))
+	o := s.Orig
+	if o.TTL > 0 {
+		args = addArgInt(args, ArgOrigTTL, o.TTL)
 	}
-	if s.Orig.TTL6 > 0 {
-		args = append(args, fmt.Sprintf("--orig-ttl6=%d", s.Orig.TTL6))
+	if o.TTL6 > 0 {
+		args = addArgInt(args, ArgOrigTTL6, o.TTL6)
 	}
-	if s.Orig.AutoTTL != "" {
-		args = append(args, fmt.Sprintf("--orig-autottl=%s", s.Orig.AutoTTL))
-	}
-	if s.Orig.AutoTTL6 != "" {
-		args = append(args, fmt.Sprintf("--orig-autottl6=%s", s.Orig.AutoTTL6))
-	}
-	if s.Orig.ModStart != "" {
-		args = append(args, fmt.Sprintf("--orig-mod-start=%s", s.Orig.ModStart))
-	}
-	if s.Orig.ModCutoff != "" {
-		args = append(args, fmt.Sprintf("--orig-mod-cutoff=%s", s.Orig.ModCutoff))
-	}
-	if s.Orig.TcpFlagsSet != "" {
-		args = append(args, fmt.Sprintf("--orig-tcp-flags-set=%s", s.Orig.TcpFlagsSet))
-	}
-	if s.Orig.TcpFlagsUnset != "" {
-		args = append(args, fmt.Sprintf("--orig-tcp-flags-unset=%s", s.Orig.TcpFlagsUnset))
-	}
+	args = addArg(args, ArgOrigAutoTTL, o.AutoTTL)
+	args = addArg(args, ArgOrigAutoTTL6, o.AutoTTL6)
+	args = addArg(args, ArgOrigModStart, o.ModStart)
+	args = addArg(args, ArgOrigModCutoff, o.ModCutoff)
+	args = addArg(args, ArgOrigTcpFlagsSet, o.TcpFlagsSet)
+	args = addArg(args, ArgOrigTcpFlagsUnset, o.TcpFlagsUnset)
 	return args
 }

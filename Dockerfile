@@ -45,6 +45,9 @@ COPY --from=nfqws-builder /tmp/zapret/nfq/nfqws /usr/bin/nfqws
 COPY --from=builder /app/prikop /usr/bin/prikop
 
 COPY --from=builder /app/fake /app/fake
+
+RUN mkdir -p /app/targets && chmod 777 /app/targets
+
 COPY --from=builder /app/targets /app/targets
 
 RUN chmod +x /usr/bin/nfqws /usr/bin/prikop

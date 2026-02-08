@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"prikop/internal/model"
+	"prikop/internal/verifier"
 	"sync"
 	"time"
 
@@ -20,14 +21,15 @@ import (
 
 // WorkerPool manages a pool of long-lived worker containers
 type WorkerPool struct {
-	cli         *client.Client
-	ctx         context.Context
-	size        int
-	workers     chan *Worker
-	containers  []string
-	socketPaths []string
-	mu          sync.Mutex
-	hostSockDir string
+	cli            *client.Client
+	ctx            context.Context
+	size           int
+	workers        chan *Worker
+	containers     []string
+	socketPaths    []string
+	mu             sync.Mutex
+	hostSockDir    string
+	hostTargetsDir string
 }
 
 type Worker struct {
@@ -36,20 +38,21 @@ type Worker struct {
 }
 
 // NewWorkerPool initializes the pool.
-func NewWorkerPool(ctx context.Context, cli *client.Client, size int, hostSockDir string) *WorkerPool {
+func NewWorkerPool(ctx context.Context, cli *client.Client, size int, hostSockDir string, hostTargetsDir string) *WorkerPool {
 	return &WorkerPool{
-		cli:         cli,
-		ctx:         ctx,
-		size:        size,
-		workers:     make(chan *Worker, size),
-		containers:  make([]string, 0, size),
-		socketPaths: make([]string, 0, size),
-		hostSockDir: hostSockDir,
+		cli:            cli,
+		ctx:            ctx,
+		size:           size,
+		workers:        make(chan *Worker, size),
+		containers:     make([]string, 0, size),
+		socketPaths:    make([]string, 0, size),
+		hostSockDir:    hostSockDir,
+		hostTargetsDir: hostTargetsDir,
 	}
 }
 
 func (p *WorkerPool) Start() error {
-	fmt.Printf("Initializing pool with %d workers. Host socket dir: %s\n", p.size, p.hostSockDir)
+	fmt.Printf("Initializing pool with %d workers. Host socket: %s, Host targets: %s\n", p.size, p.hostSockDir, p.hostTargetsDir)
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, p.size)
@@ -93,6 +96,11 @@ func (p *WorkerPool) Start() error {
 							Type:   mount.TypeBind,
 							Source: p.hostSockDir,
 							Target: model.SocketDir,
+						},
+						{
+							Type:   mount.TypeBind,
+							Source: p.hostTargetsDir,
+							Target: verifier.TargetsDir,
 						},
 					},
 					AutoRemove: true,

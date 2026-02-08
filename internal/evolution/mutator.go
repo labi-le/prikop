@@ -1,6 +1,7 @@
 package evolution
 
 import (
+	"fmt"
 	"math/rand"
 	"prikop/internal/model"
 	"strings"
@@ -8,11 +9,60 @@ import (
 	"prikop/internal/nfqws"
 )
 
+const (
+	ProbResetSplit    = 0.4
+	ProbResetFake     = 0.7
+	ProbTimeoutRepeat = 0.4
+	ProbTimeoutMode   = 0.7
+
+	ProbMutateSplit   = 20
+	ProbMutateFake    = 35
+	ProbMutateMode    = 50
+	ProbMutateFooling = 65
+	ProbMutateTamper  = 80
+	ProbMutateTTL     = 90
+
+	ProbSecondaryMode   = 0.3
+	ProbTamperEnabled   = 0.5
+	ProbTamperHostCase  = 0.3
+	ProbTamperMethodEol = 0.5
+	ProbTamperDomCase   = 0.7
+	ProbTamperHostSpell = 0.9
+
+	ProbSplitMulti  = 0.4
+	ProbSplitDouble = 0.3
+	ProbSplitSeqOvl = 0.6
+	ProbSplitBin    = 0.3
+
+	ProbWSSFlip       = 0.4
+	ProbGlobalRepeats = 0.3
+	ProbGlobalProto   = 0.5
+	ProbGlobalWSS     = 0.7
+
+	ProbTTLAuto  = 0.6
+	ProbTTLFixed = 0.9
+
+	ProbFoolingFlip     = 0.3
+	ProbFoolingRisky    = 0.05
+	ProbFoolingHopByHop = 0.15
+
+	ProbFakeTCPTLS     = 0.8
+	ProbFakeTCPSynData = 0.9
+	ProbFakeTCPSNI     = 0.2
+	ProbFakeQUIC       = 0.5
+
+	MaxRepeatsTCP     = 6
+	MaxRepeatsUDP     = 10
+	MinRepeats        = 1
+	MaxRepeatsOverall = 10
+)
+
 var (
-	// Известные эффективные значения смещения (добавлено 32 из логов zapret)
 	magicSeqOvls = []int{336, 620, 109, 652, 1, 133, 500, 32, 2}
-	// Популярные домены для маскировки (fake-tls)
-	commonSNIs = []string{"ggpht.com", "google.com", "www.google.com", "youtube.com"}
+	commonSNIs   = []string{"ggpht.com", "google.com", "www.google.com", "max.ru", "youtube.com"}
+	commonHosts  = []string{"mapgl.2gis.com", "www.google.com", "api.google.com", "cloudflare.com"}
+	tamperSpells = []string{"HOst", "hoSt", "hOst", "host"}
+	wssSizes     = []string{"1:6", "1:8", "1:10", "500", "800", "1400", "2048:2"}
 )
 
 type Mutator struct {
@@ -32,46 +82,53 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 	r := rand.Float64()
 	m.sanitize(s)
 
+	// DPI активно сбрасывает соединение (RST).
+	// Значит, он видит сигнатуру. Нужно ломать структуру пакета (Split) или менять Fake.
 	if feedback == model.ReasonReset {
-		if r < 0.4 {
-			m.mutateFooling(s)
-		} else if r < 0.7 {
-			m.mutateSplit(s)
+		if r < ProbResetSplit {
+			m.mutateSplit(s) // Самый эффективный способ против RST
+		} else if r < ProbResetFake {
+			m.mutateFake(s) // Меняем "обертку"
 		} else {
-			m.mutateFake(s)
+			m.mutateFooling(s) // Меняем TTL/BadSum
 		}
 		m.sanitize(s)
 		return
 	}
 
+	// DPI дропает пакеты (Timeout).
+	// Скорее всего, мы сломали DPI, но пакет не дошел. Нужно менять параметры доставки.
 	if feedback == model.ReasonTimeout {
-		if r < 0.5 {
-			m.mutateRepeats(s)
-		} else if r < 0.8 {
-			m.mutateFake(s)
+		if r < ProbTimeoutRepeat {
+			m.mutateRepeats(s) // Больше повторов
+		} else if r < ProbTimeoutMode {
+			m.mutateMode(s) // Смена режима доставки
 		} else {
-			m.mutateMode(s)
+			m.mutateTTL(s) // Возможно, проблема в TTL
 		}
 		m.sanitize(s)
 		return
 	}
 
-	// Random Exploration
-	if r < 0.15 {
+	// Случайная мутация (нет обратной связи или успех)
+	choice := rand.Intn(100)
+	switch {
+	case choice < ProbMutateSplit:
+		m.mutateSplit(s) // Split теперь умнее, даем ему приоритет
+	case choice < ProbMutateFake:
+		m.mutateFake(s)
+	case choice < ProbMutateMode:
 		m.mutateMode(s)
 		if strings.Contains(s.Mode, "fake") {
 			m.mutateFake(s)
 		}
-		if strings.Contains(s.Mode, "split") {
-			m.mutateSplit(s)
-		}
-	} else if r < 0.4 {
-		m.mutateFake(s)
-	} else if r < 0.6 {
-		m.mutateSplit(s)
-	} else if r < 0.8 {
+	case choice < ProbMutateFooling:
 		m.mutateFooling(s)
-	} else {
+	case choice < ProbMutateTamper:
+		m.mutateTamper(s)
+	case choice < ProbMutateTTL:
+		m.mutateTTL(s)
+	default:
 		m.mutateGlobal(s)
 	}
 
@@ -79,19 +136,70 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 }
 
 func (m *Mutator) sanitize(s *nfqws.Strategy) {
-	isFake := strings.Contains(s.Mode, "fake")
-	isSplit := strings.Contains(s.Mode, "split") || strings.Contains(s.Mode, "disorder") || strings.Contains(s.Mode, "ipfrag")
-	isHostFake := strings.Contains(s.Mode, "hostfakesplit")
-	isFakedSplit := strings.Contains(s.Mode, "fakedsplit") || strings.Contains(s.Mode, "fakeddisorder")
+	modes := strings.Split(s.Mode, ",")
+	var p0, ipv6, p1, p2 []string
 
-	if !isFake {
+	for _, raw := range modes {
+		mode := strings.TrimSpace(raw)
+		if mode == "" {
+			continue
+		}
+
+		switch mode {
+		case "syndata", "synack":
+			p0 = append(p0, mode)
+		case "hopbyhop", "destopt", "ipfrag1":
+			ipv6 = append(ipv6, mode)
+		case "fake", "fakeknown", "rst", "rstack":
+			p1 = append(p1, mode)
+		case "multisplit", "multidisorder", "fakedsplit", "fakeddisorder",
+			"hostfakesplit", "ipfrag2", "udplen", "tamper":
+			p2 = append(p2, mode)
+		default:
+			p2 = append(p2, mode)
+		}
+	}
+
+	var finalModes []string
+	if len(p0) > 0 {
+		finalModes = append(finalModes, p0[0])
+	}
+	if len(ipv6) > 0 {
+		finalModes = append(finalModes, ipv6[0])
+	}
+	if len(p1) > 0 {
+		finalModes = append(finalModes, p1[0])
+	}
+	if len(p2) > 0 {
+		finalModes = append(finalModes, p2[0])
+	}
+
+	s.Mode = strings.Join(finalModes, ",")
+
+	isFake := strings.Contains(s.Mode, "fake")
+	isSplit := strings.Contains(s.Mode, "split") || strings.Contains(s.Mode, "disorder")
+	isHostFake := strings.Contains(s.Mode, "hostfakesplit")
+	isTamper := strings.Contains(s.Mode, "tamper")
+	isSyndata := strings.Contains(s.Mode, "syndata")
+	isUdpLen := strings.Contains(s.Mode, "udplen")
+
+	if !isFake && !isSyndata {
 		s.Fake = nfqws.FakeOptions{}
 	} else {
-		if s.Fake.TLS == "" && s.Fake.Quic == "" && s.Fake.UnknownUdp == "" && len(m.AvailableBins) > 0 {
+		isClientHello := strings.Contains(s.Fake.TLS, "clienthello")
+		isDTLS := strings.Contains(s.Fake.TLS, "dtls")
+		isKyber := strings.Contains(s.Fake.TLS, "kyber")
+
+		if s.Fake.TlsMod != "" {
+			if !isClientHello || isDTLS || isKyber {
+				s.Fake.TlsMod = ""
+			}
+		}
+
+		if s.Fake.TLS == "" && s.Fake.Quic == "" && s.Fake.UnknownUdp == "" && s.Fake.SynData == "" && len(m.AvailableBins) > 0 {
 			m.mutateFake(s)
 		}
 
-		// Protocol Enforce
 		if m.Proto == "udp" {
 			s.Fake.TLS = ""
 		} else {
@@ -100,81 +208,177 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 		}
 	}
 
-	// General Split Cleanup
 	if !isSplit && !isHostFake {
 		s.Split = nfqws.SplitOptions{}
 	}
-
-	// Strict cleanup for mode-specific params
-	if !isHostFake {
-		s.Split.HostMod = ""
-		s.Split.HostMid = ""
-	} else if s.Split.HostMod == "" {
-		s.Split.HostMod = "host=www.google.com"
+	if !isTamper {
+		s.Tamper = nfqws.TamperOptions{}
+	}
+	if !isUdpLen {
+		s.UdpLen = nfqws.UdpLenOptions{}
+	}
+	if isHostFake {
+		if s.Split.HostMod == "" {
+			s.Split.HostMod = "host=www.google.com"
+		}
 	}
 
-	if !isFakedSplit {
-		s.Split.FakedMod = ""
-		s.Split.FakedPattern = ""
+	if s.Repeats < MinRepeats {
+		s.Repeats = MinRepeats
 	}
-
-	if s.Repeats < 1 {
-		s.Repeats = 1
-	} else if s.Repeats > 10 {
-		s.Repeats = 10
+	if s.Repeats > MaxRepeatsOverall {
+		s.Repeats = MaxRepeatsOverall
 	}
 }
 
 func (m *Mutator) mutateMode(s *nfqws.Strategy) {
+	var baseModes []string
+	var secondaryModes []string
+
 	if m.Proto == "tcp" {
-		modes := []string{
-			"fake,multisplit", "fake,multisplit", // Combo Priority
-			"hostfakesplit", "hostfakesplit", // Masking Priority
-			"fake",
-			"multisplit",
-			"fakedsplit",
+		baseModes = []string{
+			"fake", "multisplit", "multidisorder",
+			"hostfakesplit", "syndata",
 		}
-		s.Mode = modes[rand.Intn(len(modes))]
+		secondaryModes = []string{"tamper", "rst", "hopbyhop", "destopt"}
 	} else {
-		modes := []string{
-			"fake", "fake", "fake", // UDP loves Fake
-			"multisplit",
+		baseModes = []string{"fake", "multisplit", "udplen", "ipfrag2"}
+		secondaryModes = []string{"udplen", "ipfrag2"}
+	}
+
+	newMode := baseModes[rand.Intn(len(baseModes))]
+
+	if rand.Float64() < ProbSecondaryMode && len(secondaryModes) > 0 {
+		sec := secondaryModes[rand.Intn(len(secondaryModes))]
+		if !strings.Contains(newMode, sec) {
+			newMode += "," + sec
 		}
-		s.Mode = modes[rand.Intn(len(modes))]
+	}
+	s.Mode = newMode
+}
+
+func (m *Mutator) mutateTamper(s *nfqws.Strategy) {
+	isP2 := strings.Contains(s.Mode, "split") ||
+		strings.Contains(s.Mode, "disorder") ||
+		strings.Contains(s.Mode, "ipfrag2") ||
+		strings.Contains(s.Mode, "udplen")
+
+	if isP2 {
+		return
+	}
+
+	if !strings.Contains(s.Mode, "tamper") {
+		if rand.Float64() < ProbTamperEnabled {
+			if s.Mode == "" {
+				s.Mode = "tamper"
+			} else {
+				s.Mode += ",tamper"
+			}
+		} else {
+			return
+		}
+	}
+
+	r := rand.Float64()
+	if r < ProbTamperHostCase {
+		s.Tamper.HostCase = !s.Tamper.HostCase
+	} else if r < ProbTamperMethodEol {
+		s.Tamper.MethodEol = !s.Tamper.MethodEol
+	} else if r < ProbTamperDomCase {
+		s.Tamper.DomCase = !s.Tamper.DomCase
+	} else if r < ProbTamperHostSpell {
+		s.Tamper.HostSpell = tamperSpells[rand.Intn(len(tamperSpells))]
+	} else {
+		s.Tamper.HostNoSpace = !s.Tamper.HostNoSpace
+	}
+}
+
+func (m *Mutator) mutateSplit(s *nfqws.Strategy) {
+	if strings.Contains(s.Mode, "hostfakesplit") {
+		mod := commonHosts[rand.Intn(len(commonHosts))]
+		s.Split.HostMod = "host=" + mod
+		s.Split.SeqOvl = 0
+		return
+	}
+
+	// ЭВРИСТИКА: Увеличиваем вероятность позиций, связанных с SNI и Host.
+	// DPI часто ломается именно на разрыве заголовков.
+	markers := []string{
+		"midsld", "sniext", "endsld", // Высокий приоритет (разрыв внутри домена/SNI)
+		"method", "host", // Средний приоритет
+		"2", "3", // Низкий приоритет (магические числа)
+	}
+
+	genPos := func() string {
+		marker := markers[rand.Intn(len(markers))]
+
+		// Для простых числовых маркеров возвращаем как есть
+		if len(marker) < 3 {
+			return marker
+		}
+
+		// Добавляем микро-смещение, чтобы "гулять" вокруг маркера (например, sniext+1)
+		offset := rand.Intn(5) - 2 // от -2 до +2
+		if offset == 0 {
+			return marker
+		}
+		if offset > 0 {
+			return fmt.Sprintf("%s+%d", marker, offset)
+		}
+		return fmt.Sprintf("%s%d", marker, offset) // offset отрицательный, знак уже есть
+	}
+
+	// Для multisplit/multidisorder часто выгодно разорвать пакет в самом начале (1) и в середине (SNI)
+	if (strings.Contains(s.Mode, "multisplit") || strings.Contains(s.Mode, "multidisorder")) && rand.Float64() < ProbSplitMulti {
+		s.Split.Pos = "1," + genPos()
+	} else if rand.Float64() < ProbSplitDouble {
+		// Двойной разрыв в случайных местах
+		s.Split.Pos = genPos() + "," + genPos()
+	} else {
+		s.Split.Pos = genPos()
+	}
+
+	// SeqOvl - важный параметр для disorder. Малые значения часто работают лучше.
+	if rand.Float64() < ProbSplitSeqOvl {
+		s.Split.SeqOvl = magicSeqOvls[rand.Intn(len(magicSeqOvls))]
+	} else {
+		s.Split.SeqOvl = 1 + rand.Intn(5)
+	}
+
+	if rand.Float64() < ProbSplitBin && len(m.AvailableBins) > 0 {
+		s.Split.Pattern = m.AvailableBins[rand.Intn(len(m.AvailableBins))]
 	}
 }
 
 func (m *Mutator) mutateRepeats(s *nfqws.Strategy) {
 	delta := rand.Intn(3) - 1
 	s.Repeats += delta
-	maxRepeats := 6
+	maxRepeats := MaxRepeatsTCP
 	if m.Proto == "udp" {
-		maxRepeats = 10 // Higher for UDP
+		maxRepeats = MaxRepeatsUDP
 	}
 	if s.Repeats > maxRepeats {
 		s.Repeats = maxRepeats
 	}
-	if rand.Float64() < 0.1 {
-		s.Repeats = 1 + rand.Intn(maxRepeats)
+	if s.Repeats < MinRepeats {
+		s.Repeats = MinRepeats
 	}
 }
 
 func (m *Mutator) mutateWSS(s *nfqws.Strategy) {
-	if rand.Float64() < 0.3 {
+	if rand.Float64() < ProbWSSFlip {
 		s.WSS.Enabled = !s.WSS.Enabled
 	}
 	if s.WSS.Enabled {
-		sizes := []string{"1:6", "1:8", "1:10", "1:100", "500", "800"}
-		s.WSS.Value = sizes[rand.Intn(len(sizes))]
+		s.WSS.Value = wssSizes[rand.Intn(len(wssSizes))]
 	}
 }
 
 func (m *Mutator) mutateGlobal(s *nfqws.Strategy) {
 	r := rand.Float64()
-	if r < 0.3 {
+	if r < ProbGlobalRepeats {
 		m.mutateRepeats(s)
-	} else if r < 0.5 {
-		// Toggle AnyProtocol/Cutoff for UDP
+	} else if r < ProbGlobalProto {
 		if m.Proto == "udp" {
 			s.AnyProtocol = !s.AnyProtocol
 			if s.AnyProtocol {
@@ -183,83 +387,25 @@ func (m *Mutator) mutateGlobal(s *nfqws.Strategy) {
 				s.Cutoff = ""
 			}
 		}
-	} else {
+	} else if r < ProbGlobalWSS {
 		m.mutateWSS(s)
-	}
-}
-
-func (m *Mutator) mutateFake(s *nfqws.Strategy) {
-	if len(m.AvailableBins) == 0 {
-		return
-	}
-	bin := m.AvailableBins[rand.Intn(len(m.AvailableBins))]
-
-	if m.Proto == "tcp" {
-		s.Fake.TLS = bin
-		r := rand.Float64()
-		if r < 0.25 {
-			s.Fake.TlsMod = "rndsni"
-		} else if r < 0.5 {
-			s.Fake.TlsMod = "rnd,dupsid"
-		} else if r < 0.75 {
-			// SNI Injection (Advanced)
-			sni := commonSNIs[rand.Intn(len(commonSNIs))]
-			s.Fake.TlsMod = "rnd,dupsid,sni=" + sni
-		} else {
-			s.Fake.TlsMod = "rnd"
-		}
 	} else {
-		// UDP Logic
-		r := rand.Float64()
-		if r < 0.5 {
-			s.Fake.Quic = bin
-			s.Fake.TlsMod = "rnd"
-			s.Fake.UnknownUdp = ""
-		} else {
-			s.Fake.UnknownUdp = bin
-			s.Fake.Quic = ""
+		if m.Proto == "udp" {
+			inc := rand.Intn(32) - 16
+			if inc == 0 {
+				inc = 2
+			}
+			s.UdpLen.Increment = inc
 		}
-	}
-}
-
-func (m *Mutator) mutateSplit(s *nfqws.Strategy) {
-	if strings.Contains(s.Mode, "hostfakesplit") {
-		// Mutate Host
-		hosts := []string{
-			"host=www.google.com",
-			"host=mapgl.2gis.com",
-			"host=api.google.com",
-			"host=cloudflare.com",
-		}
-		s.Split.HostMod = hosts[rand.Intn(len(hosts))]
-		s.Split.SeqOvl = 0
-		return
-	}
-
-	positions := []string{"1", "2", "2,sld", "2,sniext+1"}
-	s.Split.Pos = positions[rand.Intn(len(positions))]
-
-	if rand.Float64() < 0.5 {
-		// Magic Values Priority
-		s.Split.SeqOvl = magicSeqOvls[rand.Intn(len(magicSeqOvls))]
-	} else if rand.Float64() < 0.8 {
-		// Random exploration
-		s.Split.SeqOvl = 1 + rand.Intn(700)
-	} else {
-		s.Split.SeqOvl = 0
-	}
-
-	if rand.Float64() < 0.4 && len(m.AvailableBins) > 0 {
-		s.Split.Pattern = m.AvailableBins[rand.Intn(len(m.AvailableBins))]
 	}
 }
 
 func (m *Mutator) mutateTTL(s *nfqws.Strategy) {
 	r := rand.Float64()
-	if r < 0.6 {
+	if r < ProbTTLAuto {
 		s.TTL.Auto = 1 + rand.Intn(12)
 		s.TTL.Fixed = 0
-	} else if r < 0.9 {
+	} else if r < ProbTTLFixed {
 		s.TTL.Fixed = 1 + rand.Intn(10)
 		s.TTL.Auto = 0
 	} else {
@@ -269,22 +415,91 @@ func (m *Mutator) mutateTTL(s *nfqws.Strategy) {
 }
 
 func (m *Mutator) mutateFooling(s *nfqws.Strategy) {
-	flip := func(current bool) bool {
-		if rand.Float64() < 0.25 {
+	// Conservative mutations: Low probability for breaking changes
+	flip := func(current bool, prob float64) bool {
+		if rand.Float64() < prob {
 			return !current
 		}
 		return current
 	}
 
-	s.Fooling.Md5Sig = flip(s.Fooling.Md5Sig)
-	s.Fooling.BadSum = flip(s.Fooling.BadSum)
-	s.Fooling.BadSeq = flip(s.Fooling.BadSeq)
-	s.Fooling.Datanoack = flip(s.Fooling.Datanoack)
+	s.Fooling.Md5Sig = flip(s.Fooling.Md5Sig, ProbFoolingFlip)
+	// SIGNIFICANTLY REDUCED PROBABILITY FOR BADSUM/BADSEQ
+	// Only 5% chance to flip them on/off, heavily biased towards OFF via Engine penalty
+	s.Fooling.BadSum = flip(s.Fooling.BadSum, ProbFoolingRisky)
+	s.Fooling.BadSeq = flip(s.Fooling.BadSeq, ProbFoolingRisky)
 
-	if rand.Float64() < 0.1 {
+	s.Fooling.Datanoack = flip(s.Fooling.Datanoack, ProbFoolingFlip)
+	s.Fooling.Ts = flip(s.Fooling.Ts, ProbFoolingFlip)
+
+	if rand.Float64() < ProbFoolingHopByHop {
 		s.Fooling.HopByHop = !s.Fooling.HopByHop
-		if s.Fooling.HopByHop {
-			s.Fooling.HopByHop2 = false
+		s.Fooling.HopByHop2 = false
+	}
+}
+
+func (m *Mutator) mutateFake(s *nfqws.Strategy) {
+	if len(m.AvailableBins) == 0 {
+		return
+	}
+
+	pickStrict := func(keywords ...string) string {
+		var candidates []string
+		for _, b := range m.AvailableBins {
+			for _, k := range keywords {
+				if strings.Contains(b, k) {
+					candidates = append(candidates, b)
+					break
+				}
+			}
 		}
+		if len(candidates) > 0 {
+			return candidates[rand.Intn(len(candidates))]
+		}
+		return ""
+	}
+
+	pickAny := func() string { return m.AvailableBins[rand.Intn(len(m.AvailableBins))] }
+
+	if m.Proto == "tcp" {
+		r := rand.Float64()
+		tlsBin := pickStrict("clienthello")
+
+		if tlsBin != "" && !strings.Contains(tlsBin, "dtls") && r < ProbFakeTCPTLS {
+			s.Fake.TLS = tlsBin
+			if strings.Contains(tlsBin, "kyber") {
+				s.Fake.TlsMod = ""
+			} else {
+				mods := []string{"rnd", "rndsni", "rnd,dupsid", "padencap", ""}
+				s.Fake.TlsMod = mods[rand.Intn(len(mods))]
+				if rand.Float64() < ProbFakeTCPSNI {
+					sni := commonSNIs[rand.Intn(len(commonSNIs))]
+					s.Fake.TlsMod = "sni=" + sni
+				}
+			}
+		} else {
+			if r < ProbFakeTCPSynData {
+				s.Fake.SynData = "0x00"
+			} else {
+				s.Fake.TLS = pickAny()
+			}
+			s.Fake.TlsMod = ""
+		}
+	} else {
+		r := rand.Float64()
+		if r < ProbFakeQUIC {
+			quicBin := pickStrict("quic")
+			if quicBin != "" && !strings.Contains(quicBin, "short") {
+				s.Fake.Quic = quicBin
+				s.Fake.TlsMod = "rnd"
+				s.Fake.UnknownUdp = ""
+				return
+			}
+		}
+		s.Fake.UnknownUdp = pickStrict("wireguard", "dht", "stun", "512")
+		if s.Fake.UnknownUdp == "" {
+			s.Fake.UnknownUdp = pickAny()
+		}
+		s.Fake.Quic = ""
 	}
 }

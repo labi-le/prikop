@@ -13,13 +13,19 @@ import (
 
 // RunWorkerServer starts the worker in listening mode
 func RunWorkerServer(ctx context.Context, socketPath string) {
+	// Initialize Providers without fetching CIDRs (Performance optimization for workers)
+	if _, err := verifier.InitializeProviders(false); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init providers: %v\n", err)
+	} else {
+		fmt.Println("Worker initialized providers")
+	}
+
 	_ = os.Remove(socketPath)
 
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		fatalJSON(fmt.Sprintf("listen error: %v", err))
 	}
-	// Make socket accessible to everyone (orchestrator needs to read/write)
 	if err := os.Chmod(socketPath, 0777); err != nil {
 		fmt.Fprintf(os.Stderr, "chmod warning: %v\n", err)
 	}
@@ -35,13 +41,11 @@ func RunWorkerServer(ctx context.Context, socketPath string) {
 		conn, err := listener.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
-				return // Graceful shutdown
+				return
 			}
 			fmt.Fprintf(os.Stderr, "accept error: %v\n", err)
 			continue
 		}
-
-		// Blocks to process one request at a time (container has only 1 worker anyway)
 		handleConnection(conn)
 	}
 }
@@ -55,7 +59,6 @@ func handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Ensure clean state before running
 	Cleanup()
 	defer Cleanup()
 
@@ -77,7 +80,6 @@ func executeTest(req model.WorkerRequest) model.WorkerResult {
 	}
 	defer KillCmd(cmd)
 
-	// Short delay to let nfqws initialize
 	time.Sleep(50 * time.Millisecond)
 	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 		return model.WorkerResult{Error: fmt.Sprintf("nfqws crashed: %s", stdout.String())}

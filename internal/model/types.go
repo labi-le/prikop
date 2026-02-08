@@ -18,6 +18,7 @@ const (
 // WorkerRequest отправляется оркестратором воркеру
 type WorkerRequest struct {
 	StrategyArgs []string `json:"strategy_args"`
+	Filters      []string `json:"filters"` // NEW FIELD
 	TargetGroup  string   `json:"target_group"`
 }
 
@@ -57,8 +58,9 @@ type ReconReport struct {
 type FailureReason string
 
 const (
-	ReasonNone    FailureReason = ""
-	ReasonTimeout FailureReason = "timeout" // DPI Drop or Blackhole
-	ReasonReset   FailureReason = "reset"   // DPI Active Reject
-	ReasonUnknown FailureReason = "unknown"
+	ReasonNone     FailureReason = ""
+	ReasonTimeout  FailureReason = "timeout"  // DPI Drop or Blackhole
+	ReasonReset    FailureReason = "reset"    // DPI Active Reject
+	ReasonThrottle FailureReason = "throttle" // DPI Shaping/Slowdown
+	ReasonUnknown  FailureReason = "unknown"
 )

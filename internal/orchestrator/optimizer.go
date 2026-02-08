@@ -15,6 +15,15 @@ import (
 	"prikop/internal/nfqws"
 )
 
+const (
+	StagnationThreshold = 3
+	MinGensForIdealExit = 2
+	MaxComplexityTCP    = 3
+	MaxComplexityUDP    = 6
+	SimpleComplexity    = 1
+	WorkerLimit         = 50
+)
+
 // Optimizer handles the evolutionary process for a specific phase
 type Optimizer struct {
 	Pool *container.WorkerPool
@@ -24,7 +33,14 @@ func NewOptimizer(pool *container.WorkerPool) *Optimizer {
 	return &Optimizer{Pool: pool}
 }
 
-func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, maxGens int, report model.ReconReport) *model.ScoredStrategy {
+func (o *Optimizer) RunPhase(
+	ctx context.Context,
+	group string,
+	bins []string,
+	maxGens int,
+	report model.ReconReport,
+	filters string,
+) *model.ScoredStrategy {
 	// 1. Determine Protocol context
 	proto := "tcp"
 	if strings.Contains(group, "udp") || strings.Contains(group, "l7") {
@@ -33,6 +49,8 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 
 	population := galaxy.GenerateZeroGeneration(bins, report, proto)
 	var globalBest *model.ScoredStrategy
+
+	fmt.Printf(">>> Starting Phase: %s [Proto: %s] [Filters: %s]\n", group, proto, filters)
 
 	// Stagnation tracking
 	stagnationCount := 0
@@ -48,7 +66,7 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 
 		fmt.Printf(">>> GEN %d/%d (%d strategies) [Proto: %s]\n", gen, maxGens, len(population), proto)
 
-		results := o.executeBatch(ctx, population, group)
+		results := o.executeBatch(ctx, population, group, filters)
 
 		if ctx.Err() != nil {
 			return nil
@@ -61,47 +79,67 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 				evolution.CalculateScore(results[j].Result, results[j].Complexity, s2)
 		})
 
+		// --- PANIC MODE CHECK ---
+		// If Gen 0 failed completely (no survivors with >0 success),
+		// we discard everything and try Primitives (Atomic Scan).
+		if gen == 0 {
+			anySuccess := false
+			for _, r := range results {
+				if r.Result.SuccessCount > 0 {
+					anySuccess = true
+					break
+				}
+			}
+
+			if !anySuccess {
+				fmt.Println("    [!] ALL SNIPERS MISSED. Engaging Panic Mode: Primitives Scan.")
+				population = galaxy.GeneratePrimitives(bins, proto)
+				// Reset loop state effectively restarting as Gen 1
+				continue
+			}
+		}
+		// ------------------------
+
 		if len(results) > 0 {
 			bestGen := results[0]
 			sBest, _ := bestGen.Config.(nfqws.Strategy)
 			score := evolution.CalculateScore(bestGen.Result, bestGen.Complexity, sBest)
 
-			if globalBest == nil {
-				globalBest = &bestGen
-				o.logNewBest(globalBest)
-				lastBestSuccess = bestGen.Result.SuccessCount
-			} else {
-				sGlobal, _ := globalBest.Config.(nfqws.Strategy)
-				globalScore := evolution.CalculateScore(globalBest.Result, globalBest.Complexity, sGlobal)
-
-				// Update global best if better score OR (same score but less complex)
-				if score > globalScore {
+			// Only consider strategies with at least one success
+			if bestGen.Result.SuccessCount > 0 {
+				if globalBest == nil {
 					globalBest = &bestGen
 					o.logNewBest(globalBest)
-				}
-			}
+					lastBestSuccess = bestGen.Result.SuccessCount
+				} else {
+					sGlobal, _ := globalBest.Config.(nfqws.Strategy)
+					globalScore := evolution.CalculateScore(globalBest.Result, globalBest.Complexity, sGlobal)
 
-			// Stagnation Check
-			// We check against the *current generation's* max success compared to global.
-			// If current gen didn't beat previous records, we are stagnant.
-			if globalBest.Result.SuccessCount > lastBestSuccess {
-				stagnationCount = 0
-				lastBestSuccess = globalBest.Result.SuccessCount
-			} else {
-				stagnationCount++
+					if score > globalScore {
+						globalBest = &bestGen
+						o.logNewBest(globalBest)
+					}
+				}
+
+				if globalBest.Result.SuccessCount > lastBestSuccess {
+					stagnationCount = 0
+					lastBestSuccess = globalBest.Result.SuccessCount
+				} else {
+					stagnationCount++
+				}
 			}
 		}
 
-		// Early exit: Ideal strategy AND mask preference satisfied (if used)
-		if globalBest != nil && globalBest.Result.SuccessCount > 0 && globalBest.Result.SuccessCount == globalBest.Result.TotalCount && gen > 2 {
+		// Early exit: Ideal strategy found
+		if globalBest != nil && globalBest.Result.SuccessCount > 0 && globalBest.Result.SuccessCount == globalBest.Result.TotalCount && gen > MinGensForIdealExit {
 			sBest, _ := globalBest.Config.(nfqws.Strategy)
 			isMasking := strings.Contains(sBest.Mode, "fake") || strings.Contains(sBest.Mode, "hostfake")
-			maxComp := 3
+			maxComp := MaxComplexityTCP
 			if proto == "udp" {
-				maxComp = 6
+				maxComp = MaxComplexityUDP
 			}
 
-			if (isMasking && globalBest.Complexity <= maxComp) || globalBest.Complexity == 1 {
+			if (isMasking && globalBest.Complexity <= maxComp) || globalBest.Complexity == SimpleComplexity {
 				fmt.Println(">>> Ideal strategy found (Masking/Simple), skipping remaining generations.")
 				break
 			}
@@ -111,21 +149,17 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 		population = evolution.Evolve(results, bins, proto)
 
 		// INJECT REINFORCEMENTS logic
-		// If stagnant for 3 gens and not perfect
-		if stagnationCount >= 3 && globalBest != nil && globalBest.Result.SuccessCount < globalBest.Result.TotalCount {
+		if stagnationCount >= StagnationThreshold && globalBest != nil && globalBest.Result.SuccessCount < globalBest.Result.TotalCount {
 			fmt.Printf("    [!] Stagnation detected (%d gens). Injecting reinforcements (Variant %d)...\n", stagnationCount, reinforcementVariant)
 
 			reinforcements := galaxy.GenerateReinforcements(bins, proto, reinforcementVariant)
 			reinforcementVariant++
 
-			// Replace the tail of the population with new snipers
-			// We keep the top elite from Evolve(), but replace the "random new" ones
 			injectIdx := len(population) - len(reinforcements)
 			if injectIdx < 0 {
 				injectIdx = 0
-			} // Safety
+			}
 
-			// We overwrite the worst strategies (which are at the end) with our crafted ones
 			for i, r := range reinforcements {
 				if injectIdx+i < len(population) {
 					population[injectIdx+i] = r
@@ -133,8 +167,6 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 					population = append(population, r)
 				}
 			}
-
-			// Reset stagnation slightly to give reinforcements a chance to breed
 			stagnationCount = 0
 		}
 
@@ -151,12 +183,12 @@ func (o *Optimizer) logNewBest(best *model.ScoredStrategy) {
 	o.logResultDetails(best)
 }
 
-func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, group string) []model.ScoredStrategy {
+func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, group string, filters string) []model.ScoredStrategy {
 	var wg sync.WaitGroup
 	results := make([]model.ScoredStrategy, len(strats))
 
-	// Semaphore to prevent Docker exhaustion if pool is large but limited
-	limit := make(chan struct{}, 50)
+	filterArgs := strings.Fields(filters)
+	limit := make(chan struct{}, WorkerLimit)
 
 	for i, s := range strats {
 		if ctx.Err() != nil {
@@ -177,6 +209,7 @@ func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, g
 			req := model.WorkerRequest{
 				StrategyArgs: strat.ToArgs(),
 				TargetGroup:  group,
+				Filters:      filterArgs,
 			}
 
 			res, err := o.Pool.Exec(ctx, req)
