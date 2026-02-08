@@ -1,6 +1,7 @@
 package galaxy
 
 import (
+	"math/rand"
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
 	"strings"
@@ -70,6 +71,24 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 				Split:   nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: binPath},
 			})
 
+			// Hyp D: Targeted Google/YT Pattern (The "Winner" Strategy)
+			population = append(population, nfqws.Strategy{
+				Mode:    "fake,multisplit",
+				Repeats: 3,
+				Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: report.BadSumWorks},
+				Fake:    nfqws.FakeOptions{TLS: binPath, TlsMod: "rnd,dupsid,sni=ggpht.com"},
+				Split:   nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: binPath},
+			})
+
+			// Hyp E: The "Zapret" Classic (SeqOvl 32)
+			population = append(population, nfqws.Strategy{
+				Mode:    "fake,multisplit",
+				Repeats: 3,
+				Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: report.BadSumWorks},
+				Fake:    nfqws.FakeOptions{TLS: binPath, TlsMod: "rnd,dupsid,sni=youtube.com"},
+				Split:   nfqws.SplitOptions{Pos: "2", SeqOvl: 32, Pattern: binPath},
+			})
+
 			// Hyp B: Pure Fake
 			population = append(population, nfqws.Strategy{
 				Mode:    "fake",
@@ -79,27 +98,11 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 			})
 
 			// Hyp C: RESTORED LEGACY (Pure Split)
-			// Variation 1: Pos 2 (Classic)
 			population = append(population, nfqws.Strategy{
 				Mode:    "multisplit",
 				Repeats: 3,
 				Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: report.BadSumWorks},
-				Split: nfqws.SplitOptions{
-					Pos:     "2",
-					SeqOvl:  336,
-					Pattern: binPath,
-				},
-			})
-			// Variation 2: Pos 1 (Aggressive Start)
-			population = append(population, nfqws.Strategy{
-				Mode:    "multisplit",
-				Repeats: 3,
-				Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: report.BadSumWorks},
-				Split: nfqws.SplitOptions{
-					Pos:     "1",
-					SeqOvl:  109,
-					Pattern: binPath,
-				},
+				Split:   nfqws.SplitOptions{Pos: "2", SeqOvl: 336, Pattern: binPath},
 			})
 
 		} else {
@@ -108,12 +111,10 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 
 			if isSmall {
 				// STUN Optimized: Gentle Fake
-				// Low repeats, no checksum tampering if possible, relies on payload content
 				population = append(population, nfqws.Strategy{
 					Mode:    "fake",
 					Repeats: 2, // Low repeats for STUN
 					Fake:    nfqws.FakeOptions{UnknownUdp: binPath},
-					// No fooling flags intentionally to avoid dropping by strict NATs
 				})
 			}
 
@@ -138,4 +139,93 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 	}
 
 	return population
+}
+
+// GenerateReinforcements creates specific tactical batches to break stagnation
+func GenerateReinforcements(bins []string, proto string, variant int) []nfqws.Strategy {
+	var reinforcement []nfqws.Strategy
+
+	// Ensure we have bins
+	var bin string
+	if len(bins) > 0 {
+		bin = bins[rand.Intn(len(bins))]
+	}
+
+	// Cycles: 0=MagicSplits, 1=Disorder, 2=TTL/Hop, 3=HeavyFake, 4=Masking
+	cycle := variant % 5
+
+	if proto == "tcp" {
+		switch cycle {
+		case 0: // Magic Splits & Combo (The most effective usually)
+			magicOvls := []int{336, 620, 109, 652, 32} // Added 32
+			for _, ovl := range magicOvls {
+				reinforcement = append(reinforcement, nfqws.Strategy{
+					Mode:    "fake,multisplit",
+					Repeats: 3,
+					Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: true},
+					Fake:    nfqws.FakeOptions{TLS: bin, TlsMod: "rnd,dupsid"},
+					Split:   nfqws.SplitOptions{Pos: "2,sld", SeqOvl: ovl, Pattern: bin},
+				})
+				// Variation with SNI spoof (youtube.com based on logs)
+				reinforcement = append(reinforcement, nfqws.Strategy{
+					Mode:    "fake,multisplit",
+					Repeats: 3,
+					Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: true},
+					Fake:    nfqws.FakeOptions{TLS: bin, TlsMod: "rnd,dupsid,sni=youtube.com"},
+					Split:   nfqws.SplitOptions{Pos: "2", SeqOvl: ovl, Pattern: bin},
+				})
+			}
+
+		case 1: // Disorder
+			reinforcement = append(reinforcement,
+				nfqws.Strategy{Mode: "multidisorder", Split: nfqws.SplitOptions{Pos: "1"}, Repeats: 2},
+				nfqws.Strategy{Mode: "fakeddisorder", Split: nfqws.SplitOptions{Pos: "1", FakedPattern: bin}, Repeats: 2},
+				nfqws.Strategy{Mode: "fakeddisorder", Split: nfqws.SplitOptions{Pos: "2", FakedPattern: bin}, Repeats: 2},
+			)
+
+		case 2: // TTL & HopByHop
+			reinforcement = append(reinforcement,
+				nfqws.Strategy{Mode: "fake", Repeats: 3, TTL: nfqws.TTLOptions{Auto: 8}, Fooling: nfqws.FoolingSet{HopByHop: true}},
+				nfqws.Strategy{Mode: "multisplit", Split: nfqws.SplitOptions{Pos: "2"}, TTL: nfqws.TTLOptions{Auto: 10}},
+				nfqws.Strategy{Mode: "hostfakesplit", Repeats: 3, Fooling: nfqws.FoolingSet{HopByHop: true}},
+			)
+
+		case 3: // WSS & Heavy Fake
+			reinforcement = append(reinforcement,
+				nfqws.Strategy{Mode: "fake", WSS: nfqws.WSSOptions{Enabled: true, Value: "1:8"}},
+				nfqws.Strategy{Mode: "fake", Fake: nfqws.FakeOptions{TLS: bin, TlsMod: "rnd,dupsid"}, Repeats: 6}, // High repeats
+			)
+
+		case 4: // Masking (HostFakeSplit variations)
+			reinforcement = append(reinforcement,
+				nfqws.Strategy{Mode: "hostfakesplit", Repeats: 2, Split: nfqws.SplitOptions{HostMod: "host=google.com"}},
+				nfqws.Strategy{Mode: "hostfakesplit", Repeats: 2, Split: nfqws.SplitOptions{HostMod: "host=mapgl.2gis.com"}},
+				nfqws.Strategy{Mode: "hostfakesplit", Repeats: 2, Split: nfqws.SplitOptions{HostMod: "host=max.ru"}},
+				nfqws.Strategy{Mode: "hostfakesplit", Repeats: 2, Split: nfqws.SplitOptions{HostMod: "host=mos.ru"}},
+				nfqws.Strategy{Mode: "hostfakesplit", Repeats: 3, Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: true}},
+			)
+		}
+	} else {
+		// UDP Reinforcements
+		switch cycle {
+		case 0: // Quic Heavy
+			reinforcement = append(reinforcement, nfqws.Strategy{
+				Mode: "fake", Repeats: 8, Fake: nfqws.FakeOptions{Quic: bin},
+			})
+		case 1: // Unknown UDP
+			reinforcement = append(reinforcement, nfqws.Strategy{
+				Mode: "fake", Repeats: 4, AnyProtocol: true, Cutoff: "d2", Fake: nfqws.FakeOptions{UnknownUdp: bin},
+			})
+		case 2: // Split UDP (rare but possible)
+			reinforcement = append(reinforcement, nfqws.Strategy{
+				Mode: "multisplit", Repeats: 3, Split: nfqws.SplitOptions{Pos: "2"},
+			})
+		default: // Random bin shuffle
+			reinforcement = append(reinforcement, nfqws.Strategy{
+				Mode: "fake", Repeats: 5, Fake: nfqws.FakeOptions{UnknownUdp: bin, TlsMod: "rnd"},
+			})
+		}
+	}
+
+	return reinforcement
 }

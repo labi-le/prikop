@@ -37,12 +37,6 @@ main() {
 --dpi-desync-split-seqovl=652
 --dpi-desync-split-pos=2
 --dpi-desync-split-seqovl-pattern=/opt/zapret/files/fake/tls_clienthello_www_google_com.bin
---new
---filter-udp=88,500,1024-19293,19345-49999,50101-65535
---dpi-desync=fake
---dpi-desync-cutoff=d2
---dpi-desync-any-protocol=1
---dpi-desync-fake-unknown-udp=/opt/zapret/files/fake/quic_initial_www_google_com.bin
 "
 }
 

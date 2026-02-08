@@ -34,6 +34,11 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 	population := galaxy.GenerateZeroGeneration(bins, report, proto)
 	var globalBest *model.ScoredStrategy
 
+	// Stagnation tracking
+	stagnationCount := 0
+	lastBestSuccess := 0
+	reinforcementVariant := 0
+
 	for gen := 0; gen < maxGens; gen++ {
 		select {
 		case <-ctx.Done():
@@ -64,13 +69,26 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 			if globalBest == nil {
 				globalBest = &bestGen
 				o.logNewBest(globalBest)
+				lastBestSuccess = bestGen.Result.SuccessCount
 			} else {
 				sGlobal, _ := globalBest.Config.(nfqws.Strategy)
 				globalScore := evolution.CalculateScore(globalBest.Result, globalBest.Complexity, sGlobal)
+
+				// Update global best if better score OR (same score but less complex)
 				if score > globalScore {
 					globalBest = &bestGen
 					o.logNewBest(globalBest)
 				}
+			}
+
+			// Stagnation Check
+			// We check against the *current generation's* max success compared to global.
+			// If current gen didn't beat previous records, we are stagnant.
+			if globalBest.Result.SuccessCount > lastBestSuccess {
+				stagnationCount = 0
+				lastBestSuccess = globalBest.Result.SuccessCount
+			} else {
+				stagnationCount++
 			}
 		}
 
@@ -78,8 +96,6 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 		if globalBest != nil && globalBest.Result.SuccessCount > 0 && globalBest.Result.SuccessCount == globalBest.Result.TotalCount && gen > 2 {
 			sBest, _ := globalBest.Config.(nfqws.Strategy)
 			isMasking := strings.Contains(sBest.Mode, "fake") || strings.Contains(sBest.Mode, "hostfake")
-
-			// UDP often needs repeats, so we allow slightly higher complexity for UDP ideal exit
 			maxComp := 3
 			if proto == "udp" {
 				maxComp = 6
@@ -91,8 +107,37 @@ func (o *Optimizer) RunPhase(ctx context.Context, group string, bins []string, m
 			}
 		}
 
-		// Pass proto to Evolve
+		// Evolve existing population
 		population = evolution.Evolve(results, bins, proto)
+
+		// INJECT REINFORCEMENTS logic
+		// If stagnant for 3 gens and not perfect
+		if stagnationCount >= 3 && globalBest != nil && globalBest.Result.SuccessCount < globalBest.Result.TotalCount {
+			fmt.Printf("    [!] Stagnation detected (%d gens). Injecting reinforcements (Variant %d)...\n", stagnationCount, reinforcementVariant)
+
+			reinforcements := galaxy.GenerateReinforcements(bins, proto, reinforcementVariant)
+			reinforcementVariant++
+
+			// Replace the tail of the population with new snipers
+			// We keep the top elite from Evolve(), but replace the "random new" ones
+			injectIdx := len(population) - len(reinforcements)
+			if injectIdx < 0 {
+				injectIdx = 0
+			} // Safety
+
+			// We overwrite the worst strategies (which are at the end) with our crafted ones
+			for i, r := range reinforcements {
+				if injectIdx+i < len(population) {
+					population[injectIdx+i] = r
+				} else {
+					population = append(population, r)
+				}
+			}
+
+			// Reset stagnation slightly to give reinforcements a chance to breed
+			stagnationCount = 0
+		}
+
 		if len(population) == 0 {
 			break
 		}

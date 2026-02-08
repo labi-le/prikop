@@ -8,6 +8,13 @@ import (
 	"prikop/internal/nfqws"
 )
 
+var (
+	// Известные эффективные значения смещения (добавлено 32 из логов zapret)
+	magicSeqOvls = []int{336, 620, 109, 652, 1, 133, 500, 32, 2}
+	// Популярные домены для маскировки (fake-tls)
+	commonSNIs = []string{"ggpht.com", "google.com", "www.google.com", "youtube.com"}
+)
+
 type Mutator struct {
 	AvailableBins []string
 	Proto         string
@@ -190,10 +197,14 @@ func (m *Mutator) mutateFake(s *nfqws.Strategy) {
 	if m.Proto == "tcp" {
 		s.Fake.TLS = bin
 		r := rand.Float64()
-		if r < 0.3 {
+		if r < 0.25 {
 			s.Fake.TlsMod = "rndsni"
-		} else if r < 0.7 {
-			s.Fake.TlsMod = "rnd,dupsid" // Advanced mod
+		} else if r < 0.5 {
+			s.Fake.TlsMod = "rnd,dupsid"
+		} else if r < 0.75 {
+			// SNI Injection (Advanced)
+			sni := commonSNIs[rand.Intn(len(commonSNIs))]
+			s.Fake.TlsMod = "rnd,dupsid,sni=" + sni
 		} else {
 			s.Fake.TlsMod = "rnd"
 		}
@@ -228,8 +239,11 @@ func (m *Mutator) mutateSplit(s *nfqws.Strategy) {
 	positions := []string{"1", "2", "2,sld", "2,sniext+1"}
 	s.Split.Pos = positions[rand.Intn(len(positions))]
 
-	if rand.Float64() < 0.6 {
-		// User config used 620, let's allow large overlaps
+	if rand.Float64() < 0.5 {
+		// Magic Values Priority
+		s.Split.SeqOvl = magicSeqOvls[rand.Intn(len(magicSeqOvls))]
+	} else if rand.Float64() < 0.8 {
+		// Random exploration
 		s.Split.SeqOvl = 1 + rand.Intn(700)
 	} else {
 		s.Split.SeqOvl = 0

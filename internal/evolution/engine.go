@@ -12,7 +12,7 @@ import (
 
 const (
 	PopulationSize    = 100
-	ScoreMaskingBonus = 5.0
+	ScoreMaskingBonus = 10.0 // Increased from 5.0 to favor robust masking
 	ScoreBadSumBonus  = 2.0
 )
 
