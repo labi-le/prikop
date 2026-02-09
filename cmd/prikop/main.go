@@ -8,6 +8,9 @@ import (
 	"prikop/internal/orchestrator"
 	"prikop/internal/worker"
 	"syscall"
+	"time"
+
+	"github.com/rs/zerolog"
 )
 
 func main() {
@@ -21,9 +24,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.Kitchen}
+	log := zerolog.New(output).With().Timestamp().Logger()
+
 	if *workerSocket != "" {
-		worker.RunWorkerServer(ctx, *workerSocket)
+		worker.RunWorkerServer(ctx, *workerSocket, log)
 	} else {
-		orchestrator.Run(cfg)
+		orchestrator.Run(cfg, log)
 	}
 }

@@ -2,10 +2,13 @@ package verifier
 
 import (
 	"context"
+
+	"github.com/rs/zerolog"
 )
 
 type DiscordVerifier struct {
 	Mode string // discord_tcp, discord_udp, discord_l7
+	log  zerolog.Logger
 }
 
 func (v *DiscordVerifier) Name() string {
@@ -40,5 +43,5 @@ func (v *DiscordVerifier) Run(ctx context.Context) CheckResult {
 		}
 	}
 
-	return ExecuteChecks(ctx, v.Mode, targets)
+	return ExecuteChecks(ctx, v.log, targets)
 }

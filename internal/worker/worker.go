@@ -9,28 +9,30 @@ import (
 	"prikop/internal/model"
 	"prikop/internal/verifier"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // RunWorkerServer starts the worker in listening mode
-func RunWorkerServer(ctx context.Context, socketPath string) {
+func RunWorkerServer(ctx context.Context, socketPath string, log zerolog.Logger) {
 	// Initialize Providers without fetching CIDRs (Performance optimization for workers)
-	if _, err := verifier.InitializeProviders(false); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init providers: %v\n", err)
+	if _, err := verifier.InitializeProviders(false, log); err != nil {
+		log.Warn().Err(err).Msg("Failed to init providers")
 	} else {
-		fmt.Println("Worker initialized providers")
+		log.Info().Msg("Worker initialized providers")
 	}
 
 	_ = os.Remove(socketPath)
 
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
-		fatalJSON(fmt.Sprintf("listen error: %v", err))
+		log.Fatal().Err(err).Msg("Listen error")
 	}
 	if err := os.Chmod(socketPath, 0777); err != nil {
-		fmt.Fprintf(os.Stderr, "chmod warning: %v\n", err)
+		log.Warn().Err(err).Msg("chmod failed")
 	}
 
-	fmt.Printf("Worker listening on %s\n", socketPath)
+	log.Info().Str("socket", socketPath).Msg("Worker listening")
 
 	go func() {
 		<-ctx.Done()
@@ -43,14 +45,14 @@ func RunWorkerServer(ctx context.Context, socketPath string) {
 			if ctx.Err() != nil {
 				return
 			}
-			fmt.Fprintf(os.Stderr, "accept error: %v\n", err)
+			log.Error().Err(err).Msg("Accept error")
 			continue
 		}
-		handleConnection(conn)
+		go handleConnection(conn, log)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, log zerolog.Logger) {
 	defer conn.Close()
 
 	var req model.WorkerRequest
@@ -62,14 +64,14 @@ func handleConnection(conn net.Conn) {
 	Cleanup()
 	defer Cleanup()
 
-	res := executeTest(req)
+	res := executeTest(req, log.With().Str("group", req.TargetGroup).Logger())
 
 	if err := json.NewEncoder(conn).Encode(res); err != nil {
-		fmt.Fprintf(os.Stderr, "write response error: %v\n", err)
+		log.Error().Err(err).Msg("Failed to write response")
 	}
 }
 
-func executeTest(req model.WorkerRequest) model.WorkerResult {
+func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult {
 	if err := SetupIptables(req.TargetGroup); err != nil {
 		return model.WorkerResult{Error: fmt.Sprintf("iptables: %v", err)}
 	}
@@ -85,7 +87,7 @@ func executeTest(req model.WorkerRequest) model.WorkerResult {
 		return model.WorkerResult{Error: fmt.Sprintf("nfqws crashed: %s", stdout.String())}
 	}
 
-	v := verifier.NewVerifier(req.TargetGroup)
+	v := verifier.NewVerifier(req.TargetGroup, log) // Will require change in verifier
 	ctx, cancel := context.WithTimeout(context.Background(), model.CheckTimeout)
 	defer cancel()
 
@@ -105,7 +107,4 @@ func sendError(conn net.Conn, msg string) {
 	_ = json.NewEncoder(conn).Encode(model.WorkerResult{Error: msg})
 }
 
-func fatalJSON(err string) {
-	_ = json.NewEncoder(os.Stdout).Encode(model.WorkerResult{Error: err})
-	os.Exit(1)
-}
+// fatalJSON is no longer used, replaced by direct log.Fatal()

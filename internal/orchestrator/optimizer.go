@@ -2,17 +2,17 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
-	"sort"
-	"strings"
-	"sync"
-	"time"
-
 	"prikop/internal/container"
 	"prikop/internal/evolution"
 	"prikop/internal/galaxy"
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -27,10 +27,11 @@ const (
 // Optimizer handles the evolutionary process for a specific phase
 type Optimizer struct {
 	Pool *container.WorkerPool
+	log  zerolog.Logger
 }
 
-func NewOptimizer(pool *container.WorkerPool) *Optimizer {
-	return &Optimizer{Pool: pool}
+func NewOptimizer(pool *container.WorkerPool, log zerolog.Logger) *Optimizer {
+	return &Optimizer{Pool: pool, log: log}
 }
 
 func (o *Optimizer) RunPhase(
@@ -41,18 +42,17 @@ func (o *Optimizer) RunPhase(
 	report model.ReconReport,
 	filters string,
 ) *model.ScoredStrategy {
-	// 1. Determine Protocol context
 	proto := "tcp"
 	if strings.Contains(group, "udp") || strings.Contains(group, "l7") {
 		proto = "udp"
 	}
+	phaseLog := o.log.With().Str("group", group).Str("proto", proto).Str("filters", filters).Logger()
 
 	population := galaxy.GenerateZeroGeneration(bins, report, proto)
 	var globalBest *model.ScoredStrategy
 
-	fmt.Printf(">>> Starting Phase: %s [Proto: %s] [Filters: %s]\n", group, proto, filters)
+	phaseLog.Info().Msg("Starting phase")
 
-	// Stagnation tracking
 	stagnationCount := 0
 	lastBestSuccess := 0
 	reinforcementVariant := 0
@@ -64,7 +64,8 @@ func (o *Optimizer) RunPhase(
 		default:
 		}
 
-		fmt.Printf(">>> GEN %d/%d (%d strategies) [Proto: %s]\n", gen, maxGens, len(population), proto)
+		genLog := phaseLog.With().Int("gen", gen).Int("max_gens", maxGens).Int("population", len(population)).Logger()
+		genLog.Info().Msg("Starting generation")
 
 		results := o.executeBatch(ctx, population, group, filters)
 
@@ -79,9 +80,6 @@ func (o *Optimizer) RunPhase(
 				evolution.CalculateScore(results[j].Result, results[j].Complexity, s2)
 		})
 
-		// --- PANIC MODE CHECK ---
-		// If Gen 0 failed completely (no survivors with >0 success),
-		// we discard everything and try Primitives (Atomic Scan).
 		if gen == 0 {
 			anySuccess := false
 			for _, r := range results {
@@ -92,24 +90,21 @@ func (o *Optimizer) RunPhase(
 			}
 
 			if !anySuccess {
-				fmt.Println("    [!] ALL SNIPERS MISSED. Engaging Panic Mode: Primitives Scan.")
+				genLog.Warn().Msg("All snipers missed. Engaging Panic Mode: Primitives Scan.")
 				population = galaxy.GeneratePrimitives(bins, proto)
-				// Reset loop state effectively restarting as Gen 1
 				continue
 			}
 		}
-		// ------------------------
 
 		if len(results) > 0 {
 			bestGen := results[0]
 			sBest, _ := bestGen.Config.(nfqws.Strategy)
 			score := evolution.CalculateScore(bestGen.Result, bestGen.Complexity, sBest)
 
-			// Only consider strategies with at least one success
 			if bestGen.Result.SuccessCount > 0 {
 				if globalBest == nil {
 					globalBest = &bestGen
-					o.logNewBest(globalBest)
+					o.logNewBest(genLog, globalBest)
 					lastBestSuccess = bestGen.Result.SuccessCount
 				} else {
 					sGlobal, _ := globalBest.Config.(nfqws.Strategy)
@@ -117,7 +112,7 @@ func (o *Optimizer) RunPhase(
 
 					if score > globalScore {
 						globalBest = &bestGen
-						o.logNewBest(globalBest)
+						o.logNewBest(genLog, globalBest)
 					}
 				}
 
@@ -130,7 +125,6 @@ func (o *Optimizer) RunPhase(
 			}
 		}
 
-		// Early exit: Ideal strategy found
 		if globalBest != nil && globalBest.Result.SuccessCount > 0 && globalBest.Result.SuccessCount == globalBest.Result.TotalCount && gen > MinGensForIdealExit {
 			sBest, _ := globalBest.Config.(nfqws.Strategy)
 			isMasking := strings.Contains(sBest.Mode, "fake") || strings.Contains(sBest.Mode, "hostfake")
@@ -140,17 +134,15 @@ func (o *Optimizer) RunPhase(
 			}
 
 			if (isMasking && globalBest.Complexity <= maxComp) || globalBest.Complexity == SimpleComplexity {
-				fmt.Println(">>> Ideal strategy found (Masking/Simple), skipping remaining generations.")
+				genLog.Info().Msg("Ideal strategy found (Masking/Simple), skipping remaining generations.")
 				break
 			}
 		}
 
-		// Evolve existing population
-		population = evolution.Evolve(results, bins, proto)
+		population = evolution.Evolve(results, bins, proto, genLog)
 
-		// INJECT REINFORCEMENTS logic
 		if stagnationCount >= StagnationThreshold && globalBest != nil && globalBest.Result.SuccessCount < globalBest.Result.TotalCount {
-			fmt.Printf("    [!] Stagnation detected (%d gens). Injecting reinforcements (Variant %d)...\n", stagnationCount, reinforcementVariant)
+			genLog.Warn().Int("stagnation_count", stagnationCount).Int("variant", reinforcementVariant).Msg("Stagnation detected. Injecting reinforcements.")
 
 			reinforcements := galaxy.GenerateReinforcements(bins, proto, reinforcementVariant)
 			reinforcementVariant++
@@ -171,6 +163,7 @@ func (o *Optimizer) RunPhase(
 		}
 
 		if len(population) == 0 {
+			genLog.Warn().Msg("Population extinct. Ending phase.")
 			break
 		}
 	}
@@ -178,9 +171,19 @@ func (o *Optimizer) RunPhase(
 	return globalBest
 }
 
-func (o *Optimizer) logNewBest(best *model.ScoredStrategy) {
-	fmt.Printf(">>> NEW BEST: %s (Success: %d/%d)\n", best.Config.String(), best.Result.SuccessCount, best.Result.TotalCount)
-	o.logResultDetails(best)
+func (o *Optimizer) logNewBest(log zerolog.Logger, best *model.ScoredStrategy) {
+	log.Info().
+		Str("strategy", best.Config.String()).
+		Int("success", best.Result.SuccessCount).
+		Int("total", best.Result.TotalCount).
+		Msg("New best strategy found")
+
+	if len(best.Result.Passed) > 0 {
+		log.Debug().Strs("passed", best.Result.Passed).Msg("Passed targets")
+	}
+	if len(best.Result.Failed) > 0 {
+		log.Debug().Strs("failed", best.Result.Failed).Msg("Failed targets")
+	}
 }
 
 func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, group string, filters string) []model.ScoredStrategy {
@@ -232,19 +235,4 @@ func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, g
 	}
 	wg.Wait()
 	return results
-}
-
-func (o *Optimizer) logResultDetails(best *model.ScoredStrategy) {
-	if len(best.Result.Passed) > 0 {
-		fmt.Println("    [+] PASSED:")
-		for _, u := range best.Result.Passed {
-			fmt.Printf("        %s\n", u)
-		}
-	}
-	if len(best.Result.Failed) > 0 {
-		fmt.Println("    [-] FAILED:")
-		for _, u := range best.Result.Failed {
-			fmt.Printf("        %s\n", u)
-		}
-	}
 }

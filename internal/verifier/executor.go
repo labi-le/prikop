@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"math/rand"
 	"net"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go/http3"
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -44,8 +44,8 @@ type httpClients struct {
 	quic *http.Client
 }
 
-func ExecuteChecks(ctx context.Context, groupName string, targets []Target) CheckResult {
-	fmt.Printf("    [v] Verifying group: %s (%d targets)\n", groupName, len(targets))
+func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []Target) CheckResult {
+	log.Info().Int("target_count", len(targets)).Msg("Verifying group")
 	clients := initClients()
 
 	var wg sync.WaitGroup

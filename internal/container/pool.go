@@ -17,6 +17,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/client"
+	"github.com/rs/zerolog"
 )
 
 // WorkerPool manages a pool of long-lived worker containers
@@ -30,6 +31,7 @@ type WorkerPool struct {
 	mu             sync.Mutex
 	hostSockDir    string
 	hostTargetsDir string
+	log            zerolog.Logger
 }
 
 type Worker struct {
@@ -38,7 +40,7 @@ type Worker struct {
 }
 
 // NewWorkerPool initializes the pool.
-func NewWorkerPool(ctx context.Context, cli *client.Client, size int, hostSockDir string, hostTargetsDir string) *WorkerPool {
+func NewWorkerPool(ctx context.Context, cli *client.Client, size int, hostSockDir string, hostTargetsDir string, log zerolog.Logger) *WorkerPool {
 	return &WorkerPool{
 		cli:            cli,
 		ctx:            ctx,
@@ -48,11 +50,12 @@ func NewWorkerPool(ctx context.Context, cli *client.Client, size int, hostSockDi
 		socketPaths:    make([]string, 0, size),
 		hostSockDir:    hostSockDir,
 		hostTargetsDir: hostTargetsDir,
+		log:            log,
 	}
 }
 
 func (p *WorkerPool) Start() error {
-	fmt.Printf("Initializing pool with %d workers. Host socket: %s, Host targets: %s\n", p.size, p.hostSockDir, p.hostTargetsDir)
+	p.log.Info().Int("size", p.size).Str("socket_dir", p.hostSockDir).Str("targets_dir", p.hostTargetsDir).Msg("Initializing worker pool")
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, p.size)
@@ -69,6 +72,7 @@ func (p *WorkerPool) Start() error {
 
 			workerName := fmt.Sprintf("prikop-worker-%d", idx)
 			workerID := fmt.Sprintf("worker_%d", idx)
+			log := p.log.With().Str("worker_name", workerName).Int("worker_idx", idx).Logger()
 
 			sockPathInner := filepath.Join(model.SocketDir, workerID+".sock")
 			sockPathOrchestrator := filepath.Join(model.SocketDir, workerID+".sock")
@@ -109,6 +113,7 @@ func (p *WorkerPool) Start() error {
 
 			resp, err := p.cli.ContainerCreate(p.ctx, createOpts)
 			if err != nil {
+				log.Error().Err(err).Msg("Failed to create worker container")
 				errChan <- fmt.Errorf("create worker %d: %w", idx, err)
 				return
 			}
@@ -118,11 +123,13 @@ func (p *WorkerPool) Start() error {
 			p.mu.Unlock()
 
 			if _, err := p.cli.ContainerStart(p.ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+				log.Error().Err(err).Msg("Failed to start worker container")
 				errChan <- fmt.Errorf("start worker %d: %w", idx, err)
 				return
 			}
 
-			if err := p.waitForSocket(sockPathOrchestrator, resp.ID); err != nil {
+			if err := p.waitForSocket(log, sockPathOrchestrator, resp.ID); err != nil {
+				log.Error().Err(err).Msg("Worker failed to become ready")
 				errChan <- fmt.Errorf("worker %d failed to start: %w", idx, err)
 				return
 			}
@@ -131,6 +138,7 @@ func (p *WorkerPool) Start() error {
 				ID:         workerID,
 				SocketPath: sockPathOrchestrator,
 			}
+			log.Debug().Msg("Worker started successfully")
 		}(i)
 	}
 
@@ -144,7 +152,7 @@ func (p *WorkerPool) Start() error {
 	return nil
 }
 
-func (p *WorkerPool) waitForSocket(path string, containerID string) error {
+func (p *WorkerPool) waitForSocket(log zerolog.Logger, path string, containerID string) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -163,10 +171,16 @@ func (p *WorkerPool) waitForSocket(path string, containerID string) error {
 			// Check if container died
 			insp, err := p.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 			if err == nil && !insp.Container.State.Running {
-				logs, _ := p.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+				logs, logErr := p.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
+				if logErr != nil {
+					log.Warn().Err(logErr).Msg("Failed to retrieve container logs")
+				}
 				var buf bytes.Buffer
-				stdcopy.StdCopy(&buf, &buf, logs)
-				return fmt.Errorf("worker died early (ExitCode: %d). Logs: %s", insp.Container.State.ExitCode, buf.String())
+				if logs != nil {
+					stdcopy.StdCopy(&buf, &buf, logs)
+				}
+				log.Error().Int("exit_code", insp.Container.State.ExitCode).Str("logs", buf.String()).Msg("Worker container died early")
+				return fmt.Errorf("worker died early (ExitCode: %d)", insp.Container.State.ExitCode)
 			}
 		}
 	}
@@ -193,7 +207,7 @@ func (p *WorkerPool) Stop() {
 
 	for _, path := range p.socketPaths {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			fmt.Printf("Warning: failed to remove socket %s: %v\n", path, err)
+			p.log.Warn().Err(err).Str("path", path).Msg("Failed to remove worker socket")
 		}
 	}
 }

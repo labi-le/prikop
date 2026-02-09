@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 const TargetsDir = "/app/targets"
@@ -19,12 +21,12 @@ var (
 	repoMu       sync.RWMutex
 )
 
-func InitializeProviders(shouldFetchCIDRs bool) ([]ProviderDefinition, error) {
+func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]ProviderDefinition, error) {
 	var definitions = make([]ProviderDefinition, len(StaticProviders))
 	copy(definitions, StaticProviders)
 
 	if err := os.MkdirAll(TargetsDir, 0777); err != nil {
-		fmt.Printf("Warning: failed to create targets dir: %v\n", err)
+		log.Warn().Err(err).Msg("Failed to create targets directory")
 	}
 
 	for i := range definitions {
@@ -53,11 +55,12 @@ func InitializeProviders(shouldFetchCIDRs bool) ([]ProviderDefinition, error) {
 
 				def := &definitions[idx]
 				src := def.CIDRSource
-				fmt.Printf(">>> Fetching CIDRs for %s from %s\n", def.Name, src)
+				provLog := log.With().Str("provider", def.Name).Str("source", src).Logger()
+				provLog.Info().Msg("Fetching CIDRs")
 
 				cidrs, err := downloadCIDRs(client, src)
 				if err != nil {
-					fmt.Printf("Error fetching CIDRs for %s: %v\n", def.Name, err)
+					provLog.Error().Err(err).Msg("Error fetching CIDRs")
 					return
 				}
 
@@ -66,10 +69,10 @@ func InitializeProviders(shouldFetchCIDRs bool) ([]ProviderDefinition, error) {
 					filePath := filepath.Join(TargetsDir, fileName)
 
 					if err := saveCIDRsToFile(filePath, cidrs); err != nil {
-						fmt.Printf("Error saving CIDRs to file for %s: %v\n", def.Name, err)
+						provLog.Error().Err(err).Msg("Error saving CIDRs to file")
 					} else {
 						def.CIDRFile = filePath
-						fmt.Printf("    [%s] Saved %d CIDRs to %s\n", def.Name, len(cidrs), filePath)
+						provLog.Info().Int("count", len(cidrs)).Str("path", filePath).Msg("Saved CIDRs")
 					}
 				}
 			}(i)

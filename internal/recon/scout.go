@@ -2,21 +2,21 @@ package recon
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"prikop/internal/container"
 	"prikop/internal/model"
+
+	"github.com/rs/zerolog"
 )
 
 // RunScout performs active reconnaissance (middlebox fingerprinting)
-// Now uses WorkerPool for fast execution instead of spinning up new containers.
-func RunScout(ctx context.Context, pool *container.WorkerPool, group string) model.ReconReport {
-	fmt.Println(">>> STARTING ACTIVE RECONNAISSANCE...")
+func RunScout(ctx context.Context, pool *container.WorkerPool, group string, log zerolog.Logger) model.ReconReport {
+	log.Info().Msg("Starting active reconnaissance...")
 	r := model.ReconReport{}
 
 	// 1. Check Fragmentation (ipfrag1)
-	fmt.Print("    [?] Probing Fragmentation (ipfrag1)... ")
+	log.Info().Msg("Probing Fragmentation (ipfrag1)...")
 
 	fragReq := model.WorkerRequest{
 		StrategyArgs: strings.Fields("--dpi-desync=ipfrag1 --dpi-desync-repeats=2"),
@@ -25,19 +25,19 @@ func RunScout(ctx context.Context, pool *container.WorkerPool, group string) mod
 
 	fragRes, err := pool.Exec(ctx, fragReq)
 	if err == nil && fragRes.Success {
-		fmt.Println("WORKS (High Priority)")
+		log.Info().Msg("Fragmentation probe works (High Priority)")
 		r.IPFragWorks = true
 	} else {
 		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
+			log.Error().Err(err).Msg("Fragmentation probe failed")
 		} else {
-			fmt.Println("FAILED (Pruning ipfrag1)")
+			log.Warn().Msg("Fragmentation probe shows no effect (Pruning ipfrag1)")
 		}
 		r.IPFragWorks = false
 	}
 
 	// 2. Check BadSum
-	fmt.Print("    [?] Probing BadSum (fake+badsum)... ")
+	log.Info().Msg("Probing BadSum (fake+badsum)...")
 
 	badsumReq := model.WorkerRequest{
 		StrategyArgs: strings.Fields("--dpi-desync=fake --dpi-desync-fooling=badsum"),
@@ -46,13 +46,13 @@ func RunScout(ctx context.Context, pool *container.WorkerPool, group string) mod
 
 	badsumRes, err := pool.Exec(ctx, badsumReq)
 	if err == nil && badsumRes.Success {
-		fmt.Println("WORKS (Will Boost)")
+		log.Info().Msg("BadSum probe works (Will Boost)")
 		r.BadSumWorks = true
 	} else {
 		if err != nil {
-			fmt.Printf("ERROR: %v\n", err)
+			log.Error().Err(err).Msg("BadSum probe failed")
 		} else {
-			fmt.Println("NO EFFECT/FAILED (Standard probability)")
+			log.Warn().Msg("BadSum probe shows no effect (Standard probability)")
 		}
 		r.BadSumWorks = false
 	}

@@ -3,18 +3,17 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
-	"strings"
-	"syscall"
-
 	"prikop/internal/container"
 	"prikop/internal/model"
 	"prikop/internal/recon"
 	"prikop/internal/verifier"
+	"strings"
+	"syscall"
 
 	"github.com/moby/moby/client"
+	"github.com/rs/zerolog"
 )
 
 type Config struct {
@@ -32,13 +31,13 @@ var pool *container.WorkerPool
 
 const HostListPath = "/app/targets"
 
-func Run(cfg Config) {
+func Run(cfg Config, log zerolog.Logger) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
-		log.Fatalf("Error creating docker client: %v", err)
+		log.Fatal().Err(err).Msg("Error creating docker client")
 	}
 	defer cli.Close()
 
@@ -53,49 +52,47 @@ func Run(cfg Config) {
 		_ = os.MkdirAll(hostTargetsDir, 0777)
 	}
 
-	pool = container.NewWorkerPool(ctx, cli, model.MaxWorkers, hostSockDir, hostTargetsDir)
+	pool = container.NewWorkerPool(ctx, cli, model.MaxWorkers, hostSockDir, hostTargetsDir, log.With().Str("component", "workerpool").Logger())
 
 	if err := pool.Start(); err != nil {
-		log.Fatalf("Worker pool start failed: %v", err)
+		log.Fatal().Err(err).Msg("Worker pool start failed")
 	}
 	defer func() {
-		fmt.Println(">>> Cleaning up resources...")
+		log.Info().Msg("Cleaning up resources...")
 		pool.Stop()
 	}()
 
-	fmt.Println(">>> RUNNING GLOBAL RECONNAISSANCE")
-	report := recon.RunScout(ctx, pool, "google_tcp")
+	log.Info().Msg("Running global reconnaissance")
+	report := recon.RunScout(ctx, pool, "google_tcp", log.With().Str("component", "recon").Logger())
 	if ctx.Err() != nil {
 		return
 	}
-	fmt.Printf("Recon Report: %+v\n", report)
+	log.Info().Interface("report", report).Msg("Recon Report")
 
 	discoveredBins, err := container.DiscoverBinFiles(cfg.FakePath)
 	if err != nil {
 		if ctx.Err() != nil {
 			return
 		}
-		log.Fatalf("Failed to discover bins: %v", err)
+		log.Fatal().Err(err).Msg("Failed to discover bins")
 	}
-	fmt.Printf(">>> Found %d bin files\n", len(discoveredBins))
+	log.Info().Int("count", len(discoveredBins)).Msg("Discovered bin files")
 
-	// Load providers using static definitions
-	providers, err := verifier.InitializeProviders(true)
+	providers, err := verifier.InitializeProviders(true, log.With().Str("component", "verifier").Logger())
 	if err != nil {
-		fmt.Printf("Warning: failed to initialize providers: %v\n", err)
+		log.Warn().Err(err).Msg("Failed to initialize providers")
 	}
-	fmt.Printf(">>> Initialized %d providers definitions\n", len(providers))
+	log.Info().Int("count", len(providers)).Msg("Initialized provider definitions")
 
-	phases := definePhases(providers)
-	optimizer := NewOptimizer(pool)
+	phases := definePhases(providers, log)
+	optimizer := NewOptimizer(pool, log.With().Str("component", "optimizer").Logger())
 
-	executePhases(ctx, optimizer, phases, discoveredBins, report)
+	executePhases(ctx, optimizer, phases, discoveredBins, report, log)
 }
 
-func definePhases(providers []verifier.ProviderDefinition) []Phase {
+func definePhases(providers []verifier.ProviderDefinition, log zerolog.Logger) []Phase {
 	var phases []Phase
 
-	// 1. Core Phases
 	phases = append(phases, Phase{
 		Name:    "GOOGLE TCP",
 		Group:   "google_tcp",
@@ -103,7 +100,6 @@ func definePhases(providers []verifier.ProviderDefinition) []Phase {
 		Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", HostListPath),
 	})
 
-	//// FIX: Add strict L7 filter to avoid processing Torrent DHT garbage
 	phases = append(phases, Phase{
 		Name:    "GOOGLE UDP (QUIC)",
 		Group:   "google_udp",
@@ -111,17 +107,15 @@ func definePhases(providers []verifier.ProviderDefinition) []Phase {
 		Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
 	})
 
-	// 2. Dynamic Provider Phases
 	for _, p := range providers {
 		filters := "--filter-tcp=80,443"
 
 		if p.CIDRFile != "" {
 			filters += fmt.Sprintf(" --ipset=%s", p.CIDRFile)
 		} else {
-			fmt.Printf("Warning: Provider %s has no CIDR file, skipping specific filters\n", p.Name)
+			log.Warn().Str("provider", p.Name).Msg("Provider has no CIDR file, skipping specific filters")
 		}
 
-		// Fallback/Default for missing Gens in existing/new definitions
 		gens := p.Gens
 		if gens == 0 {
 			gens = 5
@@ -138,7 +132,7 @@ func definePhases(providers []verifier.ProviderDefinition) []Phase {
 	return phases
 }
 
-func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []string, report model.ReconReport) {
+func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []string, report model.ReconReport, log zerolog.Logger) {
 	var finalConfigs []string
 
 	for _, p := range phases {
@@ -146,7 +140,8 @@ func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []s
 			return
 		}
 
-		fmt.Printf("\n>>> PHASE: %s\n", p.Name)
+		phaseLogger := log.With().Str("phase", p.Name).Logger()
+		phaseLogger.Info().Msg("Executing phase")
 
 		best := opt.RunPhase(ctx, p.Group, bins, p.Gens, report, p.Filters)
 		if ctx.Err() != nil {
@@ -155,28 +150,23 @@ func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []s
 
 		if best != nil && best.Result.SuccessCount > 0 {
 			strategyArgs := best.Config.String()
-			fmt.Printf(">>> WINNER: %s\n", strategyArgs)
+			phaseLogger.Info().Str("winner", strategyArgs).Msg("Phase finished with a winning strategy")
 			block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
 			finalConfigs = append(finalConfigs, block)
 		} else {
-			fmt.Printf(">>> FAILED: No working strategy found for %s\n", p.Name)
+			phaseLogger.Warn().Msg("Phase failed: No working strategy found")
 		}
 	}
 
-	printFinalConfig(finalConfigs)
+	printFinalConfig(finalConfigs, log)
 }
 
-func printFinalConfig(configs []string) {
-	fmt.Println("\n=======================================================")
-	fmt.Println(">>> 🎉 FINAL CONFIGURATION")
-	fmt.Println("=======================================================")
-
+func printFinalConfig(configs []string, log zerolog.Logger) {
+	log.Info().Msg("Final configuration")
 	if len(configs) == 0 {
-		fmt.Println("# No working strategies found.")
+		log.Warn().Msg("No working strategies found.")
 		return
 	}
-
 	finalStr := strings.Join(configs, "\n--new\n")
-	fmt.Println(finalStr)
-	fmt.Println("\n=======================================================")
+	log.Info().Str("config", finalStr).Msg("Generated configuration")
 }

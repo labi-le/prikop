@@ -1,13 +1,14 @@
 package evolution
 
 import (
-	"fmt"
 	"math/rand"
 	"sort"
 	"strings"
 
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
+
+	"github.com/rs/zerolog"
 )
 
 const (
@@ -34,11 +35,10 @@ const (
 	ClusterMinSizeForBackup  = 3
 )
 
-func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto string) []nfqws.Strategy {
+func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto string, log zerolog.Logger) []nfqws.Strategy {
 	var nextGen []nfqws.Strategy
 	mutator := NewMutator(discoveredBins, proto)
 
-	// 1. ЖЕСТКИЙ ФИЛЬТР: Выживают только те, кто хоть что-то пробил.
 	var survivors []model.ScoredStrategy
 	for _, r := range results {
 		if r.Result.SuccessCount > SurvivorSuccessThreshold {
@@ -46,9 +46,6 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 		}
 	}
 
-	// === ЭВОЛЮЦИОННОЕ СПАСЕНИЕ ===
-	// Если никто не выжил (Success == 0), ищем тех, кто сломал логику DPI (вызвал Timeout вместо Reset).
-	// Timeout означает, что DPI "завис" или дропнул пакет, не сумев распознать запрос. Это шаг к победе.
 	if len(survivors) == 0 {
 		foundTimeouts := false
 		for _, r := range results {
@@ -58,25 +55,21 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 			}
 		}
 		if foundTimeouts {
-			fmt.Printf("    [!] [%s] No direct survivors. Salvaged strategies that caused DPI Timeout (Confusion).\n", strings.ToUpper(proto))
+			log.Warn().Msg("No direct survivors. Salvaged strategies that caused DPI Timeout (Confusion).")
 		}
 	}
 
-	// 2. EXTINCTION EVENT -> CHAOS MODE
-	// Если даже Timeout-стратегий нет, запускаем Хаос
 	if len(survivors) == 0 {
-		fmt.Printf("    [!] [%s] EXTINCTION: No strategies survived. Spawning Chaos Generation.\n", strings.ToUpper(proto))
+		log.Warn().Msg("EXTINCTION: No strategies survived. Spawning Chaos Generation.")
 		return generateChaos(mutator, PopulationSize, proto)
 	}
 
-	// 3. Кластеризация (чтобы не размножать одно и то же)
 	clusters := make(map[string][]model.ScoredStrategy)
 	for _, r := range survivors {
 		strat, ok := r.Config.(nfqws.Strategy)
 		if !ok {
 			continue
 		}
-		// Группируем по Mode и позиции Split, чтобы сохранить разнообразие видов
 		key := strat.Mode
 		if strings.Contains(strat.Mode, "split") || strings.Contains(strat.Mode, "disorder") {
 			key += "|" + strat.Split.Pos
@@ -84,11 +77,10 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 		clusters[key] = append(clusters[key], r)
 	}
 
-	fmt.Printf("    [i] [%s] Diversity: %d unique working architectures survived.\n", strings.ToUpper(proto), len(clusters))
+	log.Info().Int("diversity", len(clusters)).Msg("Unique working architectures survived.")
 
 	var bestParents []model.ScoredStrategy
 
-	// Отбираем лучших представителей каждого кластера
 	for _, cluster := range clusters {
 		sort.Slice(cluster, func(i, j int) bool {
 			s1, _ := cluster[i].Config.(nfqws.Strategy)
@@ -97,13 +89,11 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 				CalculateScore(cluster[j].Result, cluster[j].Complexity, s2)
 		})
 
-		// Лучший идет в родители и в следующее поколение
 		bestParents = append(bestParents, cluster[0])
 		if s, ok := cluster[0].Config.(nfqws.Strategy); ok {
 			nextGen = append(nextGen, s)
 		}
 
-		// Если стратегия идеальна (100% успех), берем и второго лучшего (backup)
 		if len(cluster) > ClusterMinSizeForBackup && cluster[0].Result.SuccessCount == cluster[0].Result.TotalCount {
 			if s, ok := cluster[1].Config.(nfqws.Strategy); ok {
 				nextGen = append(nextGen, s)
@@ -111,7 +101,6 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 		}
 	}
 
-	// 4. Breeding (Размножение с мутациями)
 	slotsRemaining := PopulationSize - len(nextGen)
 	if slotsRemaining < 0 {
 		slotsRemaining = 0
@@ -119,21 +108,17 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 
 	if len(bestParents) > 0 {
 		for i := 0; i < slotsRemaining; i++ {
-			// Случайный родитель из лучших
 			parent := bestParents[rand.Intn(len(bestParents))]
 			if s, ok := parent.Config.(nfqws.Strategy); ok {
 				child := s
-				// Умная мутация на основе причины смерти родителя
 				mutator.SmartMutate(&child, parent.Result.FailureType)
 				nextGen = append(nextGen, child)
 			}
 		}
 	} else {
-		// Fallback (на всякий случай)
 		return generateChaos(mutator, PopulationSize, proto)
 	}
 
-	// Обрезка популяции
 	if len(nextGen) > PopulationSize {
 		nextGen = nextGen[:PopulationSize]
 	}
