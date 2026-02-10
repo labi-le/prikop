@@ -80,9 +80,11 @@ func (p *WorkerPool) Start() error {
 			p.mu.Unlock()
 
 			w, err := p.spawnWorker(name, id, socketPath)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				p.log.Error().Err(err).Str("worker", id).Msg("Failed to spawn worker")
-				errChan <- fmt.Errorf("worker %d: %w", idx, err)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					p.log.Error().Err(err).Str("worker", id).Msg("Failed to spawn worker")
+					errChan <- fmt.Errorf("worker %d: %w", idx, err)
+				}
 				return
 			}
 
