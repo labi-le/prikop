@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"prikop/internal/model"
-	"prikop/internal/verifier"
+	"prikop/internal/verifier/tcp16_20"
 	"sync"
 	"time"
 
@@ -104,7 +104,7 @@ func (p *WorkerPool) Start() error {
 						{
 							Type:   mount.TypeBind,
 							Source: p.hostTargetsDir,
-							Target: verifier.TargetsDir,
+							Target: tcp16_20.TargetsDir,
 						},
 					},
 					AutoRemove: true,

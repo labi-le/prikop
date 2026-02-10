@@ -15,13 +15,6 @@ import (
 
 // RunWorkerServer starts the worker in listening mode
 func RunWorkerServer(ctx context.Context, socketPath string, log zerolog.Logger) {
-	// Initialize Providers without fetching CIDRs (Performance optimization for workers)
-	if _, err := verifier.InitializeProviders(false, log); err != nil {
-		log.Warn().Err(err).Msg("Failed to init providers")
-	} else {
-		log.Info().Msg("Worker initialized providers")
-	}
-
 	_ = os.Remove(socketPath)
 
 	listener, err := net.Listen("unix", socketPath)

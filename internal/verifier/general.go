@@ -3,23 +3,29 @@ package verifier
 import (
 	"context"
 	"fmt"
+	"prikop/internal/verifier/checker"
+	"prikop/internal/verifier/types"
 
 	"github.com/rs/zerolog"
 )
 
 type GeneralVerifier struct {
 	Mode    string
-	Targets []Target
-	log     zerolog.Logger
+	Targets []types.Target
+	Log     zerolog.Logger
+}
+
+func NewGeneralVerifier(mode string, log zerolog.Logger) *GeneralVerifier {
+	return &GeneralVerifier{Mode: mode, Log: log}
 }
 
 func (v *GeneralVerifier) Name() string {
 	return fmt.Sprintf("Verifier (%s)", v.Mode)
 }
 
-func (v *GeneralVerifier) Run(ctx context.Context) CheckResult {
+func (v *GeneralVerifier) Run(ctx context.Context) types.CheckResult {
 	if len(v.Targets) == 0 {
-		return CheckResult{Success: false, Details: "No targets defined"}
+		return types.CheckResult{Success: false, Details: "No targets defined"}
 	}
-	return ExecuteChecks(ctx, v.log, v.Targets)
+	return checker.ExecuteChecks(ctx, v.Log, v.Targets)
 }

@@ -8,7 +8,8 @@ import (
 	"prikop/internal/container"
 	"prikop/internal/model"
 	"prikop/internal/recon"
-	"prikop/internal/verifier"
+	"prikop/internal/verifier/tcp16_20"
+	"prikop/internal/verifier/types"
 	"strings"
 	"syscall"
 
@@ -82,7 +83,7 @@ func Run(cfg Config, log zerolog.Logger) {
 	}
 	log.Info().Int("count", len(discoveredBins)).Msg("Discovered bin files")
 
-	providers, err := verifier.InitializeProviders(true, log.With().Str("component", "verifier").Logger())
+	providers, err := tcp16_20.InitializeProviders(true, log.With().Str("component", "verifier").Logger())
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to initialize providers")
 	}
@@ -94,7 +95,7 @@ func Run(cfg Config, log zerolog.Logger) {
 	executePhases(ctx, optimizer, phases, discoveredBins, report, log)
 }
 
-func definePhases(providers []verifier.ProviderDefinition, log zerolog.Logger) []Phase {
+func definePhases(providers []types.ProviderDefinition, log zerolog.Logger) []Phase {
 	var phases []Phase
 
 	phases = append(phases, Phase{

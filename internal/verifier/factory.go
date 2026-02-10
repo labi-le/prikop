@@ -1,33 +1,26 @@
 package verifier
 
 import (
+	"prikop/internal/verifier/discord"
+	"prikop/internal/verifier/tcp16_20"
+	"prikop/internal/verifier/types"
+	"prikop/internal/verifier/youtube"
 	"strings"
 
 	"github.com/rs/zerolog"
 )
 
-func NewVerifier(targetGroup string, log zerolog.Logger) Verifier {
-	// 1. Built-in verifiers
+func NewVerifier(targetGroup string, log zerolog.Logger) types.Verifier {
 	if strings.Contains(targetGroup, "discord_udp") || strings.Contains(targetGroup, "discord_l7") {
-		return &DiscordVerifier{Mode: targetGroup, log: log}
+		return &discord.Verifier{Mode: targetGroup, Log: log}
 	}
 	if strings.Contains(targetGroup, "google") {
-		return &GoogleVerifier{Mode: targetGroup, log: log}
+		return &youtube.Verifier{Mode: targetGroup, Log: log}
 	}
 
-	// 2. Dynamic Provider verifiers
-	if p, ok := GetProvider(targetGroup); ok {
-		return &GeneralVerifier{
-			Mode:    targetGroup,
-			Targets: p.Targets,
-			log:     log,
-		}
-	}
-
-	// 3. Fallback (Legacy General)
 	return &GeneralVerifier{
 		Mode:    targetGroup,
-		Targets: GeneralTargets, // Fallback to hardcoded list in data.go
-		log:     log,
+		Targets: tcp16_20.GeneralTargets,
+		Log:     log,
 	}
 }

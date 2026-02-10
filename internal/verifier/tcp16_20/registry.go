@@ -1,4 +1,4 @@
-package verifier
+package tcp16_20
 
 import (
 	"encoding/json"
@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"prikop/internal/verifier/types"
 	"strings"
 	"sync"
 	"time"
@@ -16,23 +17,18 @@ import (
 
 const TargetsDir = "/app/targets"
 
-var (
-	providerRepo = make(map[string]ProviderDefinition)
-	repoMu       sync.RWMutex
-)
-
-func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]ProviderDefinition, error) {
-	var definitions = make([]ProviderDefinition, len(StaticProviders))
-	copy(definitions, StaticProviders)
+func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]types.ProviderDefinition, error) {
+	result := make([]types.ProviderDefinition, len(definitions))
+	copy(result, definitions)
 
 	if err := os.MkdirAll(TargetsDir, 0777); err != nil {
 		log.Warn().Err(err).Msg("Failed to create targets directory")
 	}
 
-	for i := range definitions {
-		for j := range definitions[i].Targets {
-			if definitions[i].Targets[j].Threshold == 0 {
-				definitions[i].Targets[j].Threshold = 1024
+	for i := range result {
+		for j := range result[i].Targets {
+			if result[i].Targets[j].Threshold == 0 {
+				result[i].Targets[j].Threshold = 1024
 			}
 		}
 	}
@@ -42,8 +38,8 @@ func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]ProviderD
 		sem := make(chan struct{}, 5)
 		client := &http.Client{Timeout: 30 * time.Second}
 
-		for i := range definitions {
-			if definitions[i].CIDRSource == "" {
+		for i := range result {
+			if result[i].CIDRSource == "" {
 				continue
 			}
 
@@ -53,7 +49,7 @@ func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]ProviderD
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				def := &definitions[idx]
+				def := &result[idx]
 				src := def.CIDRSource
 				provLog := log.With().Str("provider", def.Name).Str("source", src).Logger()
 				provLog.Info().Msg("Fetching CIDRs")
@@ -81,15 +77,7 @@ func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]ProviderD
 		wg.Wait()
 	}
 
-	repoMu.Lock()
-	defer repoMu.Unlock()
-
-	providerRepo = make(map[string]ProviderDefinition)
-	for _, def := range definitions {
-		providerRepo[def.Name] = def
-	}
-
-	return definitions, nil
+	return result, nil
 }
 
 func saveCIDRsToFile(path string, cidrs []string) error {
@@ -170,11 +158,4 @@ func downloadCIDRs(client *http.Client, url string) ([]string, error) {
 	}
 
 	return result, nil
-}
-
-func GetProvider(name string) (ProviderDefinition, bool) {
-	repoMu.RLock()
-	defer repoMu.RUnlock()
-	p, ok := providerRepo[name]
-	return p, ok
 }
