@@ -24,4 +24,4 @@ build:
 	docker build -t prikop:latest .
 
 context:
-	./generate_context.sh . -e targets -e '*_test.go' > context.md
+	./generate_context.sh . -e targets -e internal/tcp16_20 -e '*_test.go' > context.md

@@ -8,7 +8,7 @@ const (
 	QueueNum               = "200"
 	ImageName              = "prikop:latest"
 	ContainerTimeout       = 15 * time.Second
-	MaxWorkers             = 25
+	MaxWorkers             = 50
 	MaxConcurrentProviders = 3
 	CheckTimeout           = 4000 * time.Millisecond
 	TargetSuccessRate      = 80
@@ -74,6 +74,7 @@ const (
 	ReasonTLSCertMismatch     FailureReason = "tls_cert_mismatch"     // MITM — имя в сертификате не совпадает
 	ReasonTLSBadMAC           FailureReason = "tls_bad_mac"           // DPI повредил MAC записи
 	ReasonTLSDecrypt          FailureReason = "tls_decrypt"           // Ошибка расшифровки сообщения
+	ReasonTLSDecode           FailureReason = "tls_decode"            // Ошибка декодирования TLS-сообщения (remote error: error decoding message)
 	ReasonTLSAlertUnexpected  FailureReason = "tls_alert_unexpected"  // Нарушение порядка сообщений (state machine error)
 	ReasonTLSHandshake        FailureReason = "tls_handshake"         // Общий сбой handshake
 	ReasonTLSInternal         FailureReason = "tls_internal"          // Remote TLS internal error
@@ -81,6 +82,7 @@ const (
 	ReasonTLSUnrecognizedName FailureReason = "tls_unrecognized_name" // SNI mismatch / DPI spoofed alert
 	ReasonTLSDowngrade        FailureReason = "tls_downgrade"         // Downgrade attempt detected — MitM или broken middlebox
 	ReasonTLSBadSignature     FailureReason = "tls_bad_signature"     // Невалидная подпись сертификата — MitM подмена
+	ReasonTLSCipherSuite      FailureReason = "tls_cipher_suite"      // Сервер выбрал cipher suite, который клиент не предлагал — MitM / broken middlebox
 )
 
 func (r FailureReason) IsTLS() bool {

@@ -42,9 +42,9 @@ const (
 	ProbTTLAuto  = 0.6
 	ProbTTLFixed = 0.9
 
-	ProbFoolingFlip     = 0.3
-	ProbFoolingRisky    = 0.05
-	ProbFoolingHopByHop = 0.15
+	ProbFoolingFlip  = 0.3
+	ProbFoolingRisky = 0.05
+	// ProbFoolingHopByHop removed: IPv6 specific
 
 	ProbFakeTCPTLS     = 0.8
 	ProbFakeTCPSynData = 0.9
@@ -137,7 +137,8 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 
 func (m *Mutator) sanitize(s *nfqws.Strategy) {
 	modes := strings.Split(s.Mode, ",")
-	var p0, ipv6, p1, p2 []string
+	// ipv6 specific modes removed from sanitation logic to prevent them from being kept
+	var p0, p1, p2 []string
 
 	for _, raw := range modes {
 		mode := strings.TrimSpace(raw)
@@ -149,7 +150,8 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 		case "syndata", "synack":
 			p0 = append(p0, mode)
 		case "hopbyhop", "destopt", "ipfrag1":
-			ipv6 = append(ipv6, mode)
+			// Explicitly ignore IPv6 specific modes to enforce IPv4 compatibility
+			continue
 		case "fake", "fakeknown", "rst", "rstack":
 			p1 = append(p1, mode)
 		case "multisplit", "multidisorder", "fakedsplit", "fakeddisorder",
@@ -164,9 +166,7 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 	if len(p0) > 0 {
 		finalModes = append(finalModes, p0[0])
 	}
-	if len(ipv6) > 0 {
-		finalModes = append(finalModes, ipv6[0])
-	}
+	// IPv6 extension headers are skipped
 	if len(p1) > 0 {
 		finalModes = append(finalModes, p1[0])
 	}
@@ -229,6 +229,10 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 	if s.Repeats > MaxRepeatsOverall {
 		s.Repeats = MaxRepeatsOverall
 	}
+
+	// Enforce IPv4-only fooling
+	s.Fooling.HopByHop = false
+	s.Fooling.HopByHop2 = false
 }
 
 func (m *Mutator) mutateMode(s *nfqws.Strategy) {
@@ -240,8 +244,10 @@ func (m *Mutator) mutateMode(s *nfqws.Strategy) {
 			"fake", "multisplit", "multidisorder",
 			"hostfakesplit", "syndata",
 		}
-		secondaryModes = []string{"tamper", "rst", "hopbyhop", "destopt"}
+		// Removed "hopbyhop", "destopt" - they are IPv6 specific
+		secondaryModes = []string{"tamper", "rst"}
 	} else {
+		// "ipfrag2" is valid for IPv4, "ipfrag1" is IPv6 only
 		baseModes = []string{"fake", "multisplit", "udplen", "ipfrag2"}
 		secondaryModes = []string{"udplen", "ipfrag2"}
 	}
@@ -432,10 +438,8 @@ func (m *Mutator) mutateFooling(s *nfqws.Strategy) {
 	s.Fooling.Datanoack = flip(s.Fooling.Datanoack, ProbFoolingFlip)
 	s.Fooling.Ts = flip(s.Fooling.Ts, ProbFoolingFlip)
 
-	if rand.Float64() < ProbFoolingHopByHop {
-		s.Fooling.HopByHop = !s.Fooling.HopByHop
-		s.Fooling.HopByHop2 = false
-	}
+	s.Fooling.HopByHop = false
+	s.Fooling.HopByHop2 = false
 }
 
 func (m *Mutator) mutateFake(s *nfqws.Strategy) {

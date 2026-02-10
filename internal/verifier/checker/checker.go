@@ -297,6 +297,14 @@ func analyzeFasthttpError(err error) model.FailureReason {
 		return model.ReasonTLSDecrypt
 	}
 
+	if strings.Contains(msg, "error decoding message") {
+		return model.ReasonTLSDecode
+	}
+
+	if strings.Contains(msg, "unconfigured cipher suite") {
+		return model.ReasonTLSCipherSuite
+	}
+
 	// Нарушение порядка сообщений (State Machine Error) - бывает из-за --dpi-desync=disorder
 	if strings.Contains(msg, "remote error: unexpected message") {
 		return model.ReasonTLSAlertUnexpected
@@ -323,7 +331,8 @@ func analyzeFasthttpError(err error) model.FailureReason {
 
 	if strings.Contains(msg, "i/o timeout") ||
 		strings.Contains(msg, "deadline exceeded") ||
-		strings.Contains(msg, "Client.Timeout exceeded") {
+		strings.Contains(msg, "Client.Timeout exceeded") ||
+		strings.Contains(msg, "timed out") {
 		return model.ReasonTimeout
 	}
 
