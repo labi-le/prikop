@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"prikop/internal/model"
@@ -13,7 +14,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// RunWorkerServer starts the worker in listening mode
 func RunWorkerServer(ctx context.Context, socketPath string, log zerolog.Logger) {
 	_ = os.Remove(socketPath)
 
@@ -32,35 +32,39 @@ func RunWorkerServer(ctx context.Context, socketPath string, log zerolog.Logger)
 		listener.Close()
 	}()
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			log.Error().Err(err).Msg("Accept error")
-			continue
+	conn, err := listener.Accept()
+	listener.Close()
+	if err != nil {
+		if ctx.Err() != nil {
+			return
 		}
-		go handleConnection(conn, log)
+		log.Fatal().Err(err).Msg("Accept error")
 	}
-}
-
-func handleConnection(conn net.Conn, log zerolog.Logger) {
 	defer conn.Close()
 
-	var req model.WorkerRequest
-	if err := json.NewDecoder(conn).Decode(&req); err != nil {
-		sendError(conn, fmt.Sprintf("bad request: %v", err))
-		return
-	}
+	log.Info().Msg("Client connected, serving requests")
 
-	Cleanup()
-	defer Cleanup()
+	dec := json.NewDecoder(conn)
+	enc := json.NewEncoder(conn)
 
-	res := executeTest(req, log.With().Str("group", req.TargetGroup).Logger())
+	for {
+		var req model.WorkerRequest
+		if err := dec.Decode(&req); err != nil {
+			if err == io.EOF || ctx.Err() != nil {
+				return
+			}
+			log.Error().Err(err).Msg("Decode error")
+			return
+		}
 
-	if err := json.NewEncoder(conn).Encode(res); err != nil {
-		log.Error().Err(err).Msg("Failed to write response")
+		Cleanup()
+		res := executeTest(req, log.With().Str("group", req.TargetGroup).Logger())
+		Cleanup()
+
+		if err := enc.Encode(res); err != nil {
+			log.Error().Err(err).Msg("Encode error")
+			return
+		}
 	}
 }
 
@@ -80,11 +84,11 @@ func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult
 		return model.WorkerResult{Error: fmt.Sprintf("nfqws crashed: %s", stdout.String())}
 	}
 
-	v := verifier.NewVerifier(req.TargetGroup, log) // Will require change in verifier
-	ctx, cancel := context.WithTimeout(context.Background(), model.CheckTimeout)
+	v := verifier.NewVerifier(req.TargetGroup, log)
+	vCtx, cancel := context.WithTimeout(context.Background(), model.CheckTimeout)
 	defer cancel()
 
-	checkRes := v.Run(ctx)
+	checkRes := v.Run(vCtx)
 
 	return model.WorkerResult{
 		Success:      checkRes.Success,
@@ -95,9 +99,3 @@ func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult
 		Failed:       checkRes.FailedUrls,
 	}
 }
-
-func sendError(conn net.Conn, msg string) {
-	_ = json.NewEncoder(conn).Encode(model.WorkerResult{Error: msg})
-}
-
-// fatalJSON is no longer used, replaced by direct log.Fatal()

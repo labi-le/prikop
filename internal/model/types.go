@@ -11,8 +11,8 @@ const (
 	MaxWorkers        = 50
 	CheckTimeout      = 4000 * time.Millisecond
 	TargetSuccessRate = 80
-	// SocketDir - директория для сокетов внутри контейнеров
-	SocketDir = "/var/run/prikop"
+	WorkerMemoryLimit = 60 * 1024 * 1024 // 60 MB
+	SocketDir         = "/var/run/prikop"
 )
 
 // WorkerRequest отправляется оркестратором воркеру

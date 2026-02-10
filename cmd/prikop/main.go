@@ -24,12 +24,12 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.Kitchen}
-	log := zerolog.New(output).With().Timestamp().Logger()
-
 	if *workerSocket != "" {
+		log := zerolog.New(os.Stderr).With().Timestamp().Logger()
 		worker.RunWorkerServer(ctx, *workerSocket, log)
 	} else {
+		output := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.Kitchen}
+		log := zerolog.New(output).With().Timestamp().Logger()
 		orchestrator.Run(cfg, log)
 	}
 }

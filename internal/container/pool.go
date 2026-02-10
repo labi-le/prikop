@@ -20,7 +20,6 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// WorkerPool manages a pool of long-lived worker containers
 type WorkerPool struct {
 	cli            *client.Client
 	ctx            context.Context
@@ -36,10 +35,13 @@ type WorkerPool struct {
 
 type Worker struct {
 	ID         string
+	Name       string
 	SocketPath string
+	conn       net.Conn
+	enc        *json.Encoder
+	dec        *json.Decoder
 }
 
-// NewWorkerPool initializes the pool.
 func NewWorkerPool(ctx context.Context, cli *client.Client, size int, hostSockDir string, hostTargetsDir string, log zerolog.Logger) *WorkerPool {
 	return &WorkerPool{
 		cli:            cli,
@@ -59,86 +61,32 @@ func (p *WorkerPool) Start() error {
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, p.size)
-	// Semaphore to limit concurrent container creation API calls
 	sem := make(chan struct{}, 10)
 
 	for i := 0; i < p.size; i++ {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			workerName := fmt.Sprintf("prikop-worker-%d", idx)
-			workerID := fmt.Sprintf("worker_%d", idx)
-			log := p.log.With().Str("worker_name", workerName).Int("worker_idx", idx).Logger()
+			name := fmt.Sprintf("prikop-worker-%d", idx)
+			id := fmt.Sprintf("worker_%d", idx)
+			socketPath := filepath.Join(model.SocketDir, id+".sock")
 
-			sockPathInner := filepath.Join(model.SocketDir, workerID+".sock")
-			sockPathOrchestrator := filepath.Join(model.SocketDir, workerID+".sock")
-
-			// Register socket path for cleanup immediately
 			p.mu.Lock()
-			p.socketPaths = append(p.socketPaths, sockPathOrchestrator)
+			p.socketPaths = append(p.socketPaths, socketPath)
 			p.mu.Unlock()
 
-			// Cleanup potential stale socket/container
-			_ = os.Remove(sockPathOrchestrator)
-			_, _ = p.cli.ContainerRemove(p.ctx, workerName, client.ContainerRemoveOptions{Force: true})
-
-			createOpts := client.ContainerCreateOptions{
-				Name: workerName,
-				Config: &container.Config{
-					Image: model.ImageName,
-					Cmd:   []string{"-worker-socket", sockPathInner},
-					Tty:   false,
-				},
-				HostConfig: &container.HostConfig{
-					CapAdd: []string{"NET_ADMIN"},
-					Mounts: []mount.Mount{
-						{
-							Type:   mount.TypeBind,
-							Source: p.hostSockDir,
-							Target: model.SocketDir,
-						},
-						{
-							Type:   mount.TypeBind,
-							Source: p.hostTargetsDir,
-							Target: tcp16_20.TargetsDir,
-						},
-					},
-					AutoRemove: true,
-				},
-			}
-
-			resp, err := p.cli.ContainerCreate(p.ctx, createOpts)
+			w, err := p.spawnWorker(name, id, socketPath)
 			if err != nil {
-				log.Error().Err(err).Msg("Failed to create worker container")
-				errChan <- fmt.Errorf("create worker %d: %w", idx, err)
+				p.log.Error().Err(err).Str("worker", id).Msg("Failed to spawn worker")
+				errChan <- fmt.Errorf("worker %d: %w", idx, err)
 				return
 			}
 
-			p.mu.Lock()
-			p.containers = append(p.containers, resp.ID)
-			p.mu.Unlock()
-
-			if _, err := p.cli.ContainerStart(p.ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
-				log.Error().Err(err).Msg("Failed to start worker container")
-				errChan <- fmt.Errorf("start worker %d: %w", idx, err)
-				return
-			}
-
-			if err := p.waitForSocket(log, sockPathOrchestrator, resp.ID); err != nil {
-				log.Error().Err(err).Msg("Worker failed to become ready")
-				errChan <- fmt.Errorf("worker %d failed to start: %w", idx, err)
-				return
-			}
-
-			p.workers <- &Worker{
-				ID:         workerID,
-				SocketPath: sockPathOrchestrator,
-			}
-			log.Debug().Msg("Worker started successfully")
+			p.workers <- w
+			p.log.Debug().Str("worker", id).Msg("Worker started")
 		}(i)
 	}
 
@@ -150,6 +98,93 @@ func (p *WorkerPool) Start() error {
 		return <-errChan
 	}
 	return nil
+}
+
+func (p *WorkerPool) spawnWorker(name, id, socketPath string) (*Worker, error) {
+	log := p.log.With().Str("worker", id).Logger()
+
+	sockPathInner := filepath.Join(model.SocketDir, id+".sock")
+
+	_ = os.Remove(socketPath)
+	_, _ = p.cli.ContainerRemove(p.ctx, name, client.ContainerRemoveOptions{Force: true})
+
+	createOpts := client.ContainerCreateOptions{
+		Name: name,
+		Config: &container.Config{
+			Image: model.ImageName,
+			Cmd:   []string{"-worker-socket", sockPathInner},
+			Env:   []string{fmt.Sprintf("GOMEMLIMIT=%d", model.WorkerMemoryLimit*9/10)},
+			Tty:   false,
+		},
+		HostConfig: &container.HostConfig{
+			CapAdd: []string{"NET_ADMIN"},
+			Resources: container.Resources{
+				Memory: model.WorkerMemoryLimit,
+			},
+			Mounts: []mount.Mount{
+				{
+					Type:   mount.TypeBind,
+					Source: p.hostSockDir,
+					Target: model.SocketDir,
+				},
+				{
+					Type:   mount.TypeBind,
+					Source: p.hostTargetsDir,
+					Target: tcp16_20.TargetsDir,
+				},
+			},
+			AutoRemove: true,
+		},
+	}
+
+	resp, err := p.cli.ContainerCreate(p.ctx, createOpts)
+	if err != nil {
+		return nil, fmt.Errorf("create container: %w", err)
+	}
+
+	p.mu.Lock()
+	p.containers = append(p.containers, resp.ID)
+	p.mu.Unlock()
+
+	if _, err := p.cli.ContainerStart(p.ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+		return nil, fmt.Errorf("start container: %w", err)
+	}
+
+	if err := p.waitForSocket(log, socketPath, resp.ID); err != nil {
+		return nil, fmt.Errorf("wait socket: %w", err)
+	}
+
+	conn, err := net.DialTimeout("unix", socketPath, 2*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+
+	return &Worker{
+		ID:         id,
+		Name:       name,
+		SocketPath: socketPath,
+		conn:       conn,
+		enc:        json.NewEncoder(conn),
+		dec:        json.NewDecoder(conn),
+	}, nil
+}
+
+func (p *WorkerPool) respawnWorker(old *Worker) {
+	if p.ctx.Err() != nil {
+		return
+	}
+
+	log := p.log.With().Str("worker", old.ID).Logger()
+	log.Info().Msg("Respawning worker")
+
+	w, err := p.spawnWorker(old.Name, old.ID, old.SocketPath)
+	if err != nil {
+		log.Error().Err(err).Msg("Failed to respawn worker")
+		return
+	}
+
+	p.workers <- w
+	log.Info().Msg("Worker respawned")
 }
 
 func (p *WorkerPool) waitForSocket(log zerolog.Logger, path string, containerID string) error {
@@ -168,7 +203,6 @@ func (p *WorkerPool) waitForSocket(log zerolog.Logger, path string, containerID 
 				return nil
 			}
 
-			// Check if container died
 			insp, err := p.cli.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 			if err == nil && !insp.Container.State.Running {
 				logs, logErr := p.cli.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true})
@@ -190,6 +224,11 @@ func (p *WorkerPool) Stop() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	close(p.workers)
+	for w := range p.workers {
+		w.conn.Close()
+	}
+
 	ctx := context.Background()
 	var wg sync.WaitGroup
 
@@ -199,7 +238,6 @@ func (p *WorkerPool) Stop() {
 			defer wg.Done()
 			tCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			// Ignore errors on removal
 			_, _ = p.cli.ContainerRemove(tCtx, id, client.ContainerRemoveOptions{Force: true})
 		}(cid)
 	}
@@ -215,29 +253,33 @@ func (p *WorkerPool) Stop() {
 func (p *WorkerPool) Exec(ctx context.Context, req model.WorkerRequest) (model.WorkerResult, error) {
 	select {
 	case w := <-p.workers:
-		defer func() { p.workers <- w }()
-
-		d := net.Dialer{Timeout: 1 * time.Second}
-		conn, err := d.DialContext(ctx, "unix", w.SocketPath)
+		res, err := w.exec(req)
 		if err != nil {
-			return model.WorkerResult{}, fmt.Errorf("dial worker %s: %w", w.ID, err)
-		}
-		defer conn.Close()
-
-		conn.SetDeadline(time.Now().Add(model.ContainerTimeout + 2*time.Second))
-
-		if err := json.NewEncoder(conn).Encode(req); err != nil {
-			return model.WorkerResult{}, fmt.Errorf("send req: %w", err)
+			w.conn.Close()
+			p.log.Warn().Str("worker", w.ID).Err(err).Msg("Worker failed, respawning")
+			go p.respawnWorker(w)
+			return model.WorkerResult{}, err
 		}
 
-		var res model.WorkerResult
-		if err := json.NewDecoder(conn).Decode(&res); err != nil {
-			return model.WorkerResult{}, fmt.Errorf("read res: %w", err)
-		}
-
+		p.workers <- w
 		return res, nil
 
 	case <-ctx.Done():
 		return model.WorkerResult{}, ctx.Err()
 	}
+}
+
+func (w *Worker) exec(req model.WorkerRequest) (model.WorkerResult, error) {
+	w.conn.SetDeadline(time.Now().Add(model.ContainerTimeout + 2*time.Second))
+
+	if err := w.enc.Encode(req); err != nil {
+		return model.WorkerResult{}, fmt.Errorf("send req to %s: %w", w.ID, err)
+	}
+
+	var res model.WorkerResult
+	if err := w.dec.Decode(&res); err != nil {
+		return model.WorkerResult{}, fmt.Errorf("read res from %s: %w", w.ID, err)
+	}
+
+	return res, nil
 }
