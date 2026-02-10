@@ -10,7 +10,7 @@ const (
 	ContainerTimeout       = 15 * time.Second
 	MaxWorkers             = 50
 	MaxConcurrentProviders = 10
-	CheckTimeout           = 4000 * time.Millisecond
+	CheckTimeout           = 3000 * time.Millisecond
 	TargetSuccessRate      = 80
 	WorkerMemoryLimit      = 60 * 1024 * 1024 // 60 MB
 	SocketDir              = "/var/run/prikop"

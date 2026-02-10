@@ -6,7 +6,7 @@ import (
 
 const DefaultThreshold = 64 * 1024
 
-const gens = 20
+const gens = 5
 
 var (
 	GeneralTargets []types.Target

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	HardTimeout = 5 * time.Second
+	HardTimeout = 3 * time.Second
 	UserAgent   = "Mozilla"
 	// DefaultMinSpeed defines a sane default for throttling detection (e.g., 10KB/s)
 	DefaultMinSpeed = 10 * 1024.0
