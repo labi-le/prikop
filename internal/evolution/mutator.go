@@ -88,11 +88,12 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 	case model.ReasonReset,
 		model.ReasonTLSNotTLS,           // Вернулась заглушка
 		model.ReasonTLSOversized,        // Склейка пакетов DPI
+		model.ReasonTLSRecordOverflow,   // DPI инжектировал данные или повредил запись
 		model.ReasonTLSUnrecognizedName: // SNI mismatch (спуфинг от DPI)
 
-		if r < 0.5 {
+		if r < ProbResetSplit {
 			m.mutateSplit(s) // Меняем точку разрыва (смещаем SNI)
-		} else if r < 0.8 {
+		} else if r < ProbResetFake {
 			m.mutateFake(s) // Меняем Fake (сигнатуру мусора)
 		} else {
 			m.mutateTamper(s) // Включаем tamper (изменение заголовков)
@@ -105,9 +106,9 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 		model.ReasonTLSHandshake,
 		model.ReasonTLSInternal:
 
-		if r < 0.4 {
+		if r < ProbTimeoutRepeat {
 			m.mutateRepeats(s) // Больше повторов
-		} else if r < 0.7 {
+		} else if r < ProbTimeoutMode {
 			m.mutateMode(s) // Смена режима доставки (fake -> split)
 		} else {
 			m.mutateTTL(s) // Проблема в TTL
@@ -122,7 +123,9 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 		model.ReasonTLSDowngrade,
 		model.ReasonTLSCertUnknown,
 		model.ReasonTLSCertMismatch,
+		model.ReasonTLSCertExpired, // MITM: просроченный сертификат
 		model.ReasonTLSBadSignature,
+		model.ReasonTLSIllegalParam, // MITM: повреждение полей handshake
 		model.ReasonTLSSessionID:
 
 		if !strings.Contains(s.Mode, "synack") && r < 0.4 {
