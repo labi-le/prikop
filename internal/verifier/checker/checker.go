@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -18,12 +17,11 @@ import (
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/rs/zerolog"
-	"github.com/valyala/fasthttp"
 )
 
 const (
 	HardTimeout = 5 * time.Second
-	UserAgent   = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+	UserAgent   = "Mozilla"
 	// DefaultMinSpeed defines a sane default for throttling detection (e.g., 10KB/s)
 	DefaultMinSpeed = 10 * 1024.0
 
@@ -51,7 +49,7 @@ func failResult(reason model.FailureReason, detail string) checkResult {
 }
 
 type httpClients struct {
-	tcp  *fasthttp.Client
+	tcp  *http.Client
 	quic *http.Client
 }
 
@@ -120,21 +118,37 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 	return result
 }
 
+// - не следует редиректам
+// - валидация сертификатов включена
 func initClients() *httpClients {
+	noRedirect := func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	tcpTransport := &http.Transport{
+		TLSClientConfig:       &tls.Config{},
+		TLSHandshakeTimeout:   HardTimeout,
+		ResponseHeaderTimeout: HardTimeout,
+		MaxIdleConnsPerHost:   64,
+		IdleConnTimeout:       30 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout: HardTimeout,
+		}).DialContext,
+	}
+
 	quicTransport := &http3.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig: &tls.Config{},
 	}
 
 	return &httpClients{
-		tcp: &fasthttp.Client{
-			TLSConfig:                     &tls.Config{InsecureSkipVerify: true},
-			MaxConnsPerHost:               64,
-			ReadTimeout:                   HardTimeout,
-			WriteTimeout:                  HardTimeout,
-			MaxResponseBodySize:           128 * 1024,
-			DisableHeaderNamesNormalizing: true,
+		tcp: &http.Client{
+			Transport:     tcpTransport,
+			CheckRedirect: noRedirect,
 		},
-		quic: &http.Client{Transport: quicTransport},
+		quic: &http.Client{
+			Transport:     quicTransport,
+			CheckRedirect: noRedirect,
+		},
 	}
 }
 
@@ -147,61 +161,12 @@ func dispatchCheck(ctx context.Context, t types.Target, clients *httpClients) ch
 	case types.ProtoSTUN:
 		return checkSTUN(ctx, t)
 	case types.ProtoTCP:
-		return checkFastHTTP(t, clients.tcp)
+		return checkHTTP(ctx, t, clients.tcp)
 	case types.ProtoQUIC:
 		return checkHTTP(ctx, t, clients.quic)
 	default:
 		return failResult(model.ReasonUnknown, "unsupported protocol")
 	}
-}
-
-func checkFastHTTP(t types.Target, client *fasthttp.Client) checkResult {
-	req := fasthttp.AcquireRequest()
-	defer fasthttp.ReleaseRequest(req)
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-
-	req.SetRequestURI(t.URL)
-	req.Header.SetMethod("GET")
-	req.Header.Set("User-Agent", UserAgent)
-
-	start := time.Now()
-	err := client.DoTimeout(req, resp, t.Timeout)
-	if err != nil {
-		if errors.Is(err, fasthttp.ErrBodyTooLarge) {
-			// Body exceeded MaxResponseBodySize — connection works, data flows.
-			return okResult
-		}
-		return failResult(AnalyzeError(err), err.Error())
-	}
-
-	statusCode := resp.StatusCode()
-	if !t.IgnoreStatus && (statusCode < fasthttp.StatusOK || statusCode >= fasthttp.StatusBadRequest) {
-		return failResult(model.ReasonReset, fmt.Sprintf("HTTP %d", statusCode))
-	}
-
-	body := resp.Body()
-	readTotal := len(body)
-
-	if readTotal < t.Threshold {
-		return failResult(model.ReasonReset, fmt.Sprintf("short body: %d/%d bytes", readTotal, t.Threshold))
-	}
-
-	totalTime := time.Since(start).Seconds()
-	if totalTime > 0 {
-		speed := float64(readTotal) / totalTime
-
-		minSpeed := t.MinSpeed
-		if minSpeed == 0 {
-			minSpeed = DefaultMinSpeed
-		}
-
-		if speed < minSpeed && readTotal > MinDataForSpeedCheck {
-			return failResult(model.ReasonThrottle, fmt.Sprintf("%.1f KB/s (min %.1f KB/s)", speed/1024, minSpeed/1024))
-		}
-	}
-
-	return okResult
 }
 
 func checkHTTP(ctx context.Context, t types.Target, client *http.Client) checkResult {
