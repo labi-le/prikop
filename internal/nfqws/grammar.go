@@ -202,151 +202,151 @@ type TcpFlagsOptions struct {
 
 const (
 	// ArgDpiDesync: Primary desync mode. Modes: synack, fake, fakeknown, rst, rstack, hopbyhop, destopt, ipfrag1, multisplit, multidisorder, fakedsplit, hostfakesplit, fakeddisorder, ipfrag2, udplen, tamper.
-	ArgDpiDesync               = "--dpi-desync"
+	ArgDpiDesync = "--dpi-desync"
 	// ArgDpiDesyncRepeats: Number of times to resend each desync packet.
-	ArgDpiDesyncRepeats        = "--dpi-desync-repeats"
+	ArgDpiDesyncRepeats = "--dpi-desync-repeats"
 	// ArgDpiDesyncAnyProtocol: If 1, desync any nonempty data packet, not just HTTP/TLS.
-	ArgDpiDesyncAnyProtocol    = "--dpi-desync-any-protocol"
+	ArgDpiDesyncAnyProtocol = "--dpi-desync-any-protocol"
 	// ArgDpiDesyncSkipNoSNI: If 1 (default), do not act on ClientHello without SNI.
-	ArgDpiDesyncSkipNoSNI      = "--dpi-desync-skip-nosni"
+	ArgDpiDesyncSkipNoSNI = "--dpi-desync-skip-nosni"
 	// ArgDpiDesyncCutoff: Stop desync after N packets (n), data packets (d), or relative sequence (s).
-	ArgDpiDesyncCutoff         = "--dpi-desync-cutoff"
+	ArgDpiDesyncCutoff = "--dpi-desync-cutoff"
 	// ArgDpiDesyncStart: Start desync after N packets (n), data packets (d), or relative sequence (s).
-	ArgDpiDesyncStart          = "--dpi-desync-start"
+	ArgDpiDesyncStart = "--dpi-desync-start"
 	// ArgDpiDesyncFwmark: Override fwmark for desync packets (default 0x40000000).
-	ArgDpiDesyncFwmark         = "--dpi-desync-fwmark"
+	ArgDpiDesyncFwmark = "--dpi-desync-fwmark"
 	// ArgDpiDesyncFooling: Comma-separated fooling modes: none, md5sig, ts, badseq, badsum, datanoack, hopbyhop, hopbyhop2.
-	ArgDpiDesyncFooling        = "--dpi-desync-fooling"
+	ArgDpiDesyncFooling = "--dpi-desync-fooling"
 	// ArgDpiDesyncBadSeqInc: Seq increment for badseq fooling (default -10000).
-	ArgDpiDesyncBadSeqInc      = "--dpi-desync-badseq-increment"
+	ArgDpiDesyncBadSeqInc = "--dpi-desync-badseq-increment"
 	// ArgDpiDesyncBadAckInc: Ack increment for badseq fooling (default -66000).
-	ArgDpiDesyncBadAckInc      = "--dpi-desync-badack-increment"
+	ArgDpiDesyncBadAckInc = "--dpi-desync-badack-increment"
 	// ArgDpiDesyncTsInc: TSVal increment for ts fooling (default -600000).
-	ArgDpiDesyncTsInc          = "--dpi-desync-ts-increment"
+	ArgDpiDesyncTsInc = "--dpi-desync-ts-increment"
 	// ArgDpiDesyncFakeTls: File path or hex for custom TLS ClientHello fake.
-	ArgDpiDesyncFakeTls        = "--dpi-desync-fake-tls"
+	ArgDpiDesyncFakeTls = "--dpi-desync-fake-tls"
 	// ArgDpiDesyncFakeQuic: File path or hex for custom QUIC Initial fake.
-	ArgDpiDesyncFakeQuic       = "--dpi-desync-fake-quic"
+	ArgDpiDesyncFakeQuic = "--dpi-desync-fake-quic"
 	// ArgDpiDesyncFakeHttp: File path or hex for custom HTTP request fake.
-	ArgDpiDesyncFakeHttp       = "--dpi-desync-fake-http"
+	ArgDpiDesyncFakeHttp = "--dpi-desync-fake-http"
 	// ArgDpiDesyncFakeWireguard: File path or hex for custom Wireguard handshake fake.
-	ArgDpiDesyncFakeWireguard  = "--dpi-desync-fake-wireguard"
+	ArgDpiDesyncFakeWireguard = "--dpi-desync-fake-wireguard"
 	// ArgDpiDesyncFakeDht: File path or hex for custom DHT fake.
-	ArgDpiDesyncFakeDht        = "--dpi-desync-fake-dht"
+	ArgDpiDesyncFakeDht = "--dpi-desync-fake-dht"
 	// ArgDpiDesyncFakeDiscord: File path or hex for custom Discord IP Discovery fake.
-	ArgDpiDesyncFakeDiscord    = "--dpi-desync-fake-discord"
+	ArgDpiDesyncFakeDiscord = "--dpi-desync-fake-discord"
 	// ArgDpiDesyncFakeStun: File path or hex for custom STUN fake.
-	ArgDpiDesyncFakeStun       = "--dpi-desync-fake-stun"
+	ArgDpiDesyncFakeStun = "--dpi-desync-fake-stun"
 	// ArgDpiDesyncFakeUnknownUdp: File path or hex for unknown UDP protocol fake.
 	ArgDpiDesyncFakeUnknownUdp = "--dpi-desync-fake-unknown-udp"
 	// ArgDpiDesyncFakeUnknown: File path or hex for unknown TCP protocol fake.
-	ArgDpiDesyncFakeUnknown    = "--dpi-desync-fake-unknown"
+	ArgDpiDesyncFakeUnknown = "--dpi-desync-fake-unknown"
 	// ArgDpiDesyncFakeSynData: File path or hex for SYN data payload.
-	ArgDpiDesyncFakeSynData    = "--dpi-desync-fake-syndata"
+	ArgDpiDesyncFakeSynData = "--dpi-desync-fake-syndata"
 	// ArgDpiDesyncFakeTlsMod: Runtime TLS fake mods: none, rnd, rndsni, sni=<sni>, dupsid, padencap.
-	ArgDpiDesyncFakeTlsMod     = "--dpi-desync-fake-tls-mod"
+	ArgDpiDesyncFakeTlsMod = "--dpi-desync-fake-tls-mod"
 	// ArgDpiDesyncFakeTcpMod: TCP fake mods: none, seq. 'seq' treats fakes as segments of one stream.
-	ArgDpiDesyncFakeTcpMod     = "--dpi-desync-fake-tcp-mod"
+	ArgDpiDesyncFakeTcpMod = "--dpi-desync-fake-tcp-mod"
 	// ArgDpiDesyncSplitPos: Comma-separated split positions. Markers: method, host, endhost, sld, endsld, midsld, sniext.
-	ArgDpiDesyncSplitPos       = "--dpi-desync-split-pos"
+	ArgDpiDesyncSplitPos = "--dpi-desync-split-pos"
 	// ArgDpiDesyncSplitSeqOvl: Use sequence overlap before first split segment.
-	ArgDpiDesyncSplitSeqOvl    = "--dpi-desync-split-seqovl"
+	ArgDpiDesyncSplitSeqOvl = "--dpi-desync-split-seqovl"
 	// ArgDpiDesyncSplitPattern: Pattern for fake part of sequence overlap.
-	ArgDpiDesyncSplitPattern   = "--dpi-desync-split-seqovl-pattern"
+	ArgDpiDesyncSplitPattern = "--dpi-desync-split-seqovl-pattern"
 	// ArgDpiDesyncFakedPattern: Fake pattern for fakedsplit/fakeddisorder.
-	ArgDpiDesyncFakedPattern   = "--dpi-desync-fakedsplit-pattern"
+	ArgDpiDesyncFakedPattern = "--dpi-desync-fakedsplit-pattern"
 	// ArgDpiDesyncFakedMod: Mods for fakedsplit/fakeddisorder (altorder=N).
-	ArgDpiDesyncFakedMod       = "--dpi-desync-fakedsplit-mod"
+	ArgDpiDesyncFakedMod = "--dpi-desync-fakedsplit-mod"
 	// ArgDpiDesyncHostFakeMid: Additionally split real hostname at marker (within host..endhost).
-	ArgDpiDesyncHostFakeMid    = "--dpi-desync-hostfakesplit-midhost"
+	ArgDpiDesyncHostFakeMid = "--dpi-desync-hostfakesplit-midhost"
 	// ArgDpiDesyncHostFakeMod: hostfakesplit mods: none, host=<hostname>, altorder=0|1.
-	ArgDpiDesyncHostFakeMod    = "--dpi-desync-hostfakesplit-mod"
+	ArgDpiDesyncHostFakeMod = "--dpi-desync-hostfakesplit-mod"
 	// ArgDpiDesyncIpFragPosTcp: IPv4 fragment position for TCP (multiple of 8, default 32).
-	ArgDpiDesyncIpFragPosTcp   = "--dpi-desync-ipfrag-pos-tcp"
+	ArgDpiDesyncIpFragPosTcp = "--dpi-desync-ipfrag-pos-tcp"
 	// ArgDpiDesyncIpFragPosUdp: IPv4 fragment position for UDP (multiple of 8, default 8).
-	ArgDpiDesyncIpFragPosUdp   = "--dpi-desync-ipfrag-pos-udp"
+	ArgDpiDesyncIpFragPosUdp = "--dpi-desync-ipfrag-pos-udp"
 	// ArgDpiDesyncUdpLenInc: Increase/decrease UDP packet length by N bytes.
-	ArgDpiDesyncUdpLenInc      = "--dpi-desync-udplen-increment"
+	ArgDpiDesyncUdpLenInc = "--dpi-desync-udplen-increment"
 	// ArgDpiDesyncUdpLenPattern: Tail fill pattern for udplen.
-	ArgDpiDesyncUdpLenPattern  = "--dpi-desync-udplen-pattern"
+	ArgDpiDesyncUdpLenPattern = "--dpi-desync-udplen-pattern"
 	// ArgDpiDesyncTTL: Set fixed TTL for desync packets.
-	ArgDpiDesyncTTL            = "--dpi-desync-ttl"
+	ArgDpiDesyncTTL = "--dpi-desync-ttl"
 	// ArgDpiDesyncTTL6: Set fixed Hop Limit for IPv6 desync packets.
-	ArgDpiDesyncTTL6           = "--dpi-desync-ttl6"
+	ArgDpiDesyncTTL6 = "--dpi-desync-ttl6"
 	// ArgDpiDesyncAutoTTL: Auto TTL mode: delta[:min[-max]]. Default -1:3-20.
-	ArgDpiDesyncAutoTTL        = "--dpi-desync-autottl"
+	ArgDpiDesyncAutoTTL = "--dpi-desync-autottl"
 	// ArgDpiDesyncAutoTTL6: Overrides ArgDpiDesyncAutoTTL for IPv6.
-	ArgDpiDesyncAutoTTL6       = "--dpi-desync-autottl6"
+	ArgDpiDesyncAutoTTL6 = "--dpi-desync-autottl6"
 	// ArgDpiDesyncTcpFlagsSet: Set specific TCP flags in desync packets.
-	ArgDpiDesyncTcpFlagsSet    = "--dpi-desync-tcp-flags-set"
+	ArgDpiDesyncTcpFlagsSet = "--dpi-desync-tcp-flags-set"
 	// ArgDpiDesyncTcpFlagsUnset: Unset specific TCP flags in desync packets.
-	ArgDpiDesyncTcpFlagsUnset  = "--dpi-desync-tcp-flags-unset"
+	ArgDpiDesyncTcpFlagsUnset = "--dpi-desync-tcp-flags-unset"
 	// ArgWSSize: Set TCP window size and scale factor for server (e.g., 1:6).
-	ArgWSSize                  = "--wssize"
+	ArgWSSize = "--wssize"
 	// ArgWSSizeCutoff: Threshold to stop applying wssize (n, d, s).
-	ArgWSSizeCutoff            = "--wssize-cutoff"
+	ArgWSSizeCutoff = "--wssize-cutoff"
 	// ArgWSSizeForcedCutoff: If 1 (default), auto cutoff wssize on known protocol.
-	ArgWSSizeForcedCutoff      = "--wssize-forced-cutoff"
+	ArgWSSizeForcedCutoff = "--wssize-forced-cutoff"
 	// ArgHostCase: Change Host: => host: in HTTP.
-	ArgHostCase                = "--hostcase"
+	ArgHostCase = "--hostcase"
 	// ArgHostSpell: Exact spelling of "Host" header (4 chars).
-	ArgHostSpell               = "--hostspell"
+	ArgHostSpell = "--hostspell"
 	// ArgHostNoSpace: Remove space after Host: header.
-	ArgHostNoSpace             = "--hostnospace"
+	ArgHostNoSpace = "--hostnospace"
 	// ArgDomCase: Mix case of domain name in Host header.
-	ArgDomCase                 = "--domcase"
+	ArgDomCase = "--domcase"
 	// ArgMethodEol: Add \n before HTTP method.
-	ArgMethodEol               = "--methodeol"
+	ArgMethodEol = "--methodeol"
 	// ArgIpId: IPv4 IP_ID assignment: zero, seq, seqgroup, rnd.
-	ArgIpId                    = "--ip-id"
+	ArgIpId = "--ip-id"
 	// ArgSynAckSplit: Perform TCP split handshake: syn, synack, acksyn.
-	ArgSynAckSplit             = "--synack-split"
+	ArgSynAckSplit = "--synack-split"
 	// ArgDup: Duplicate original packets N times.
-	ArgDup                     = "--dup"
+	ArgDup = "--dup"
 	// ArgDupReplace: If 1, do not send original packet, only dups.
-	ArgDupReplace              = "--dup-replace"
+	ArgDupReplace = "--dup-replace"
 	// ArgDupTTL: TTL for duplicated packets.
-	ArgDupTTL                  = "--dup-ttl"
+	ArgDupTTL = "--dup-ttl"
 	// ArgDupTTL6: Hop Limit for IPv6 duplicated packets.
-	ArgDupTTL6                 = "--dup-ttl6"
+	ArgDupTTL6 = "--dup-ttl6"
 	// ArgDupAutoTTL: Auto TTL mode for duplicates.
-	ArgDupAutoTTL              = "--dup-autottl"
+	ArgDupAutoTTL = "--dup-autottl"
 	// ArgDupAutoTTL6: Overrides ArgDupAutoTTL for IPv6.
-	ArgDupAutoTTL6             = "--dup-autottl6"
+	ArgDupAutoTTL6 = "--dup-autottl6"
 	// ArgDupFooling: Fooling modes for duplicates.
-	ArgDupFooling              = "--dup-fooling"
+	ArgDupFooling = "--dup-fooling"
 	// ArgDupTsInc: TSVal increment for duplicates.
-	ArgDupTsInc                = "--dup-ts-increment"
+	ArgDupTsInc = "--dup-ts-increment"
 	// ArgDupBadSeqInc: Seq increment for duplicates.
-	ArgDupBadSeqInc            = "--dup-badseq-increment"
+	ArgDupBadSeqInc = "--dup-badseq-increment"
 	// ArgDupBadAckInc: Ack increment for duplicates.
-	ArgDupBadAckInc            = "--dup-badack-increment"
+	ArgDupBadAckInc = "--dup-badack-increment"
 	// ArgDupIpId: IP_ID mode for duplicates.
-	ArgDupIpId                 = "--dup-ip-id"
+	ArgDupIpId = "--dup-ip-id"
 	// ArgDupStart: Start duplicating after N packets.
-	ArgDupStart                = "--dup-start"
+	ArgDupStart = "--dup-start"
 	// ArgDupCutoff: Stop duplicating after N packets.
-	ArgDupCutoff               = "--dup-cutoff"
+	ArgDupCutoff = "--dup-cutoff"
 	// ArgDupTcpFlagsSet: Set TCP flags for duplicates.
-	ArgDupTcpFlagsSet          = "--dup-tcp-flags-set"
+	ArgDupTcpFlagsSet = "--dup-tcp-flags-set"
 	// ArgDupTcpFlagsUnset: Unset TCP flags for duplicates.
-	ArgDupTcpFlagsUnset        = "--dup-tcp-flags-unset"
+	ArgDupTcpFlagsUnset = "--dup-tcp-flags-unset"
 	// ArgOrigTTL: Set TTL for original packets.
-	ArgOrigTTL                 = "--orig-ttl"
+	ArgOrigTTL = "--orig-ttl"
 	// ArgOrigTTL6: Set Hop Limit for IPv6 original packets.
-	ArgOrigTTL6                = "--orig-ttl6"
+	ArgOrigTTL6 = "--orig-ttl6"
 	// ArgOrigAutoTTL: Auto TTL mode for original packets.
-	ArgOrigAutoTTL             = "--orig-autottl"
+	ArgOrigAutoTTL = "--orig-autottl"
 	// ArgOrigAutoTTL6: Overrides ArgOrigAutoTTL for IPv6.
-	ArgOrigAutoTTL6            = "--orig-autottl6"
+	ArgOrigAutoTTL6 = "--orig-autottl6"
 	// ArgOrigModStart: Start modding original packets after N packets.
-	ArgOrigModStart            = "--orig-mod-start"
+	ArgOrigModStart = "--orig-mod-start"
 	// ArgOrigModCutoff: Stop modding original packets after N packets.
-	ArgOrigModCutoff           = "--orig-mod-cutoff"
+	ArgOrigModCutoff = "--orig-mod-cutoff"
 	// ArgOrigTcpFlagsSet: Set TCP flags for original packets.
-	ArgOrigTcpFlagsSet         = "--orig-tcp-flags-set"
+	ArgOrigTcpFlagsSet = "--orig-tcp-flags-set"
 	// ArgOrigTcpFlagsUnset: Unset TCP flags for original packets.
-	ArgOrigTcpFlagsUnset       = "--orig-tcp-flags-unset"
+	ArgOrigTcpFlagsUnset = "--orig-tcp-flags-unset"
 )
 
 func (s Strategy) String() string {

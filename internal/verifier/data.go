@@ -10,6 +10,9 @@ var (
 )
 
 func registerProvider(p ProviderDefinition) {
+	if p.Name != "cloudflare" {
+		return
+	}
 	StaticProviders = append(StaticProviders, p)
 	GeneralTargets = append(GeneralTargets, p.Targets...)
 }

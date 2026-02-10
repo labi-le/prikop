@@ -27,6 +27,11 @@ type Phase struct {
 	Filters string
 }
 
+type config struct {
+	Config   string
+	Provider string
+}
+
 var pool *container.WorkerPool
 
 const HostListPath = "/app/targets"
@@ -58,7 +63,6 @@ func Run(cfg Config, log zerolog.Logger) {
 		log.Fatal().Err(err).Msg("Worker pool start failed")
 	}
 	defer func() {
-		log.Info().Msg("Cleaning up resources...")
 		pool.Stop()
 	}()
 
@@ -99,13 +103,13 @@ func definePhases(providers []verifier.ProviderDefinition, log zerolog.Logger) [
 		Gens:    5,
 		Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", HostListPath),
 	})
-
-	phases = append(phases, Phase{
-		Name:    "GOOGLE UDP (QUIC)",
-		Group:   "google_udp",
-		Gens:    5,
-		Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
-	})
+	//
+	//phases = append(phases, Phase{
+	//	Name:    "GOOGLE UDP (QUIC)",
+	//	Group:   "google_udp",
+	//	Gens:    5,
+	//	Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
+	//})
 
 	for _, p := range providers {
 		filters := "--filter-tcp=80,443"
@@ -133,7 +137,8 @@ func definePhases(providers []verifier.ProviderDefinition, log zerolog.Logger) [
 }
 
 func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []string, report model.ReconReport, log zerolog.Logger) {
-	var finalConfigs []string
+	var finalConfigs []config
+	configIndex := 1
 
 	for _, p := range phases {
 		if ctx.Err() != nil {
@@ -152,21 +157,44 @@ func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []s
 			strategyArgs := best.Config.String()
 			phaseLogger.Info().Str("winner", strategyArgs).Msg("Phase finished with a winning strategy")
 			block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
-			finalConfigs = append(finalConfigs, block)
+
+			finalConfigs = append(finalConfigs, config{
+				Config:   block,
+				Provider: p.Name,
+			})
+			configIndex++
 		} else {
 			phaseLogger.Warn().Msg("Phase failed: No working strategy found")
 		}
 	}
 
-	printFinalConfig(finalConfigs, log)
+	printFinalConfig(finalConfigs)
 }
 
-func printFinalConfig(configs []string, log zerolog.Logger) {
-	log.Info().Msg("Final configuration")
-	if len(configs) == 0 {
-		log.Warn().Msg("No working strategies found.")
+func printFinalConfig(configsWithProvider []config) {
+	fmt.Println(">>> 🎉 FINAL CONFIGURATION")
+	fmt.Println()
+
+	if len(configsWithProvider) == 0 {
+		fmt.Println("# No working strategies found.")
 		return
 	}
-	finalStr := strings.Join(configs, "\n--new\n")
-	log.Info().Str("config", finalStr).Msg("Generated configuration")
+
+	var outputLines []string
+	for i, configWithProvider := range configsWithProvider {
+		commentLine := fmt.Sprintf("# %d: %s", i+1, configWithProvider.Provider)
+		outputLines = append(outputLines, commentLine)
+
+		args := strings.Fields(configWithProvider.Config)
+		for _, arg := range args {
+			outputLines = append(outputLines, arg)
+		}
+
+		if i < len(configsWithProvider)-1 {
+			outputLines = append(outputLines, "--new")
+		}
+	}
+
+	finalStr := strings.Join(outputLines, "\n")
+	fmt.Println(finalStr)
 }
