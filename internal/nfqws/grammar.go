@@ -1,5 +1,71 @@
 package nfqws
 
+/*
+ZAPRET STRATEGY FLAGS DOCUMENTATION
+
+This file defines the flags used by nfqws (and dvtws) for DPI circumvention.
+Below is a detailed description of the flags, their constraints, and technical nuances.
+
+GENERAL PRINCIPLES:
+- nfqws is a packet modifier and NFQUEUE handler.
+- It targets preventing ban triggers from firing rather than eliminating consequences.
+- Techniques involve sending unexpected data to DPI (segmentation, fakes, fragmentation).
+
+DPI DESYNC ATTACKS (--dpi-desync):
+Combines multiple modes (up to 3) in ascending phase order:
+Phase 0: Connection establishment (synack, syndata, --wssize).
+Phase 1: Fakes before original data (fake, rst, rstack).
+Phase 2: Modified original data (fakedsplit, ipfrag2, multisplit, multidisorder).
+
+FAKES FOOLING (--dpi-desync-fooling):
+- md5sig: Usually works only on Linux servers. Adds TCP option, can cause MTU overflow.
+- badsum: Fails if behind NAT that verifies checksums (e.g., net.netfilter.nf_conntrack_checksum=1).
+- badseq: Dropped by server. Default increment is -10000. Use 0x80000000 to ensure it's outside window.
+- TTL: Requires tuning per ISP. Risk of cutting access to local ISP sites if set too low.
+- hopbyhop/hopbyhop2: IPv6 only. hopbyhop2 violates RFC; most OS discard it.
+- datanoack: Sends TCP fakes without ACK flag. Breaks NAT/masquerade; requires external IP.
+- ts: Adds timestamp increment (-600000 default). Requires timestamps enabled in OS.
+- autottl: Guesses hop count to server. Requires redirecting the first incoming packet (SYN,ACK).
+
+TCP SEGMENTATION & DISORDER:
+- multisplit: Splits at specified positions (--dpi-desync-split-pos).
+- multidisorder: Sends segments in reverse order.
+- fakedsplit/fakeddisorder: Single position split with fake mix.
+- hostfakesplit: Fakes the hostname part (TLS/HTTP).
+- seqovl: Sequence number overlap. Works on most Unix OS; fails on Windows servers in disorder mode.
+
+WSS (Window Size Scaling) (--wssize):
+- Forces server to split replies (e.g., ServerHello).
+- Default scale factor is 0. Recommended: 1:6 (forces split TLS certificate).
+- Use --wssize-cutoff to stop scaling after request to maintain speed.
+
+IP_ID ASSIGNMENT (--ip-id):
+- seq: Increment per packet.
+- seqgroup: Same IP_ID for fake replacements.
+- rnd: Random IP_ID.
+- zero: Zeroed IP_ID (Linux/BSD sends zero, Windows replaces with counter).
+
+IPV6 SPECIFIC:
+- hopbyhop, destopt, ipfrag1: Adds extension headers to desync DPI.
+- Headers increase packet size; may fail on max-sized packets.
+
+UDP SUPPORT:
+- Limited to: fake, fakeknown, hopbyhop, destopt, ipfrag1, ipfrag2, udplen, tamper.
+- udplen: Increases payload size to resist size-tracking DPI.
+- QUIC/Wireguard/DHT/STUN/Discord discovery recognition is supported.
+
+IP FRAGMENTATION:
+- Often filtered by networks or reassembled by middleboxes.
+- IPv4: Standard firewall rules in OUTPUT chain might cause raw send to fail.
+- IPv6: Linux often defragments automatically; requires nftables with priority -450 or raw_before_defrag=1.
+
+CONSTRAINTS & CAVEATS:
+- Virtual Machines: NAT mode in VirtualBox/VMware often breaks TTL magic and fakes. Use Bridge mode.
+- Flow Offloading: Hardware/Software offloading bypasses Netfilter. Must be disabled or selectively controlled.
+- Conntrack: nfqws needs to see the full connection lifecycle for stateful attacks.
+- Reassemble: Supports multi-packet TLS/QUIC ClientHello (e.g., Chrome Kyber).
+*/
+
 import (
 	"fmt"
 	"strings"
@@ -135,78 +201,151 @@ type TcpFlagsOptions struct {
 }
 
 const (
+	// ArgDpiDesync: Primary desync mode. Modes: synack, fake, fakeknown, rst, rstack, hopbyhop, destopt, ipfrag1, multisplit, multidisorder, fakedsplit, hostfakesplit, fakeddisorder, ipfrag2, udplen, tamper.
 	ArgDpiDesync               = "--dpi-desync"
+	// ArgDpiDesyncRepeats: Number of times to resend each desync packet.
 	ArgDpiDesyncRepeats        = "--dpi-desync-repeats"
+	// ArgDpiDesyncAnyProtocol: If 1, desync any nonempty data packet, not just HTTP/TLS.
 	ArgDpiDesyncAnyProtocol    = "--dpi-desync-any-protocol"
+	// ArgDpiDesyncSkipNoSNI: If 1 (default), do not act on ClientHello without SNI.
 	ArgDpiDesyncSkipNoSNI      = "--dpi-desync-skip-nosni"
+	// ArgDpiDesyncCutoff: Stop desync after N packets (n), data packets (d), or relative sequence (s).
 	ArgDpiDesyncCutoff         = "--dpi-desync-cutoff"
+	// ArgDpiDesyncStart: Start desync after N packets (n), data packets (d), or relative sequence (s).
 	ArgDpiDesyncStart          = "--dpi-desync-start"
+	// ArgDpiDesyncFwmark: Override fwmark for desync packets (default 0x40000000).
 	ArgDpiDesyncFwmark         = "--dpi-desync-fwmark"
+	// ArgDpiDesyncFooling: Comma-separated fooling modes: none, md5sig, ts, badseq, badsum, datanoack, hopbyhop, hopbyhop2.
 	ArgDpiDesyncFooling        = "--dpi-desync-fooling"
+	// ArgDpiDesyncBadSeqInc: Seq increment for badseq fooling (default -10000).
 	ArgDpiDesyncBadSeqInc      = "--dpi-desync-badseq-increment"
+	// ArgDpiDesyncBadAckInc: Ack increment for badseq fooling (default -66000).
 	ArgDpiDesyncBadAckInc      = "--dpi-desync-badack-increment"
+	// ArgDpiDesyncTsInc: TSVal increment for ts fooling (default -600000).
 	ArgDpiDesyncTsInc          = "--dpi-desync-ts-increment"
+	// ArgDpiDesyncFakeTls: File path or hex for custom TLS ClientHello fake.
 	ArgDpiDesyncFakeTls        = "--dpi-desync-fake-tls"
+	// ArgDpiDesyncFakeQuic: File path or hex for custom QUIC Initial fake.
 	ArgDpiDesyncFakeQuic       = "--dpi-desync-fake-quic"
+	// ArgDpiDesyncFakeHttp: File path or hex for custom HTTP request fake.
 	ArgDpiDesyncFakeHttp       = "--dpi-desync-fake-http"
+	// ArgDpiDesyncFakeWireguard: File path or hex for custom Wireguard handshake fake.
 	ArgDpiDesyncFakeWireguard  = "--dpi-desync-fake-wireguard"
+	// ArgDpiDesyncFakeDht: File path or hex for custom DHT fake.
 	ArgDpiDesyncFakeDht        = "--dpi-desync-fake-dht"
+	// ArgDpiDesyncFakeDiscord: File path or hex for custom Discord IP Discovery fake.
 	ArgDpiDesyncFakeDiscord    = "--dpi-desync-fake-discord"
+	// ArgDpiDesyncFakeStun: File path or hex for custom STUN fake.
 	ArgDpiDesyncFakeStun       = "--dpi-desync-fake-stun"
+	// ArgDpiDesyncFakeUnknownUdp: File path or hex for unknown UDP protocol fake.
 	ArgDpiDesyncFakeUnknownUdp = "--dpi-desync-fake-unknown-udp"
+	// ArgDpiDesyncFakeUnknown: File path or hex for unknown TCP protocol fake.
 	ArgDpiDesyncFakeUnknown    = "--dpi-desync-fake-unknown"
+	// ArgDpiDesyncFakeSynData: File path or hex for SYN data payload.
 	ArgDpiDesyncFakeSynData    = "--dpi-desync-fake-syndata"
+	// ArgDpiDesyncFakeTlsMod: Runtime TLS fake mods: none, rnd, rndsni, sni=<sni>, dupsid, padencap.
 	ArgDpiDesyncFakeTlsMod     = "--dpi-desync-fake-tls-mod"
+	// ArgDpiDesyncFakeTcpMod: TCP fake mods: none, seq. 'seq' treats fakes as segments of one stream.
 	ArgDpiDesyncFakeTcpMod     = "--dpi-desync-fake-tcp-mod"
+	// ArgDpiDesyncSplitPos: Comma-separated split positions. Markers: method, host, endhost, sld, endsld, midsld, sniext.
 	ArgDpiDesyncSplitPos       = "--dpi-desync-split-pos"
+	// ArgDpiDesyncSplitSeqOvl: Use sequence overlap before first split segment.
 	ArgDpiDesyncSplitSeqOvl    = "--dpi-desync-split-seqovl"
+	// ArgDpiDesyncSplitPattern: Pattern for fake part of sequence overlap.
 	ArgDpiDesyncSplitPattern   = "--dpi-desync-split-seqovl-pattern"
+	// ArgDpiDesyncFakedPattern: Fake pattern for fakedsplit/fakeddisorder.
 	ArgDpiDesyncFakedPattern   = "--dpi-desync-fakedsplit-pattern"
+	// ArgDpiDesyncFakedMod: Mods for fakedsplit/fakeddisorder (altorder=N).
 	ArgDpiDesyncFakedMod       = "--dpi-desync-fakedsplit-mod"
+	// ArgDpiDesyncHostFakeMid: Additionally split real hostname at marker (within host..endhost).
 	ArgDpiDesyncHostFakeMid    = "--dpi-desync-hostfakesplit-midhost"
+	// ArgDpiDesyncHostFakeMod: hostfakesplit mods: none, host=<hostname>, altorder=0|1.
 	ArgDpiDesyncHostFakeMod    = "--dpi-desync-hostfakesplit-mod"
+	// ArgDpiDesyncIpFragPosTcp: IPv4 fragment position for TCP (multiple of 8, default 32).
 	ArgDpiDesyncIpFragPosTcp   = "--dpi-desync-ipfrag-pos-tcp"
+	// ArgDpiDesyncIpFragPosUdp: IPv4 fragment position for UDP (multiple of 8, default 8).
 	ArgDpiDesyncIpFragPosUdp   = "--dpi-desync-ipfrag-pos-udp"
+	// ArgDpiDesyncUdpLenInc: Increase/decrease UDP packet length by N bytes.
 	ArgDpiDesyncUdpLenInc      = "--dpi-desync-udplen-increment"
+	// ArgDpiDesyncUdpLenPattern: Tail fill pattern for udplen.
 	ArgDpiDesyncUdpLenPattern  = "--dpi-desync-udplen-pattern"
+	// ArgDpiDesyncTTL: Set fixed TTL for desync packets.
 	ArgDpiDesyncTTL            = "--dpi-desync-ttl"
+	// ArgDpiDesyncTTL6: Set fixed Hop Limit for IPv6 desync packets.
 	ArgDpiDesyncTTL6           = "--dpi-desync-ttl6"
+	// ArgDpiDesyncAutoTTL: Auto TTL mode: delta[:min[-max]]. Default -1:3-20.
 	ArgDpiDesyncAutoTTL        = "--dpi-desync-autottl"
+	// ArgDpiDesyncAutoTTL6: Overrides ArgDpiDesyncAutoTTL for IPv6.
 	ArgDpiDesyncAutoTTL6       = "--dpi-desync-autottl6"
+	// ArgDpiDesyncTcpFlagsSet: Set specific TCP flags in desync packets.
 	ArgDpiDesyncTcpFlagsSet    = "--dpi-desync-tcp-flags-set"
+	// ArgDpiDesyncTcpFlagsUnset: Unset specific TCP flags in desync packets.
 	ArgDpiDesyncTcpFlagsUnset  = "--dpi-desync-tcp-flags-unset"
+	// ArgWSSize: Set TCP window size and scale factor for server (e.g., 1:6).
 	ArgWSSize                  = "--wssize"
+	// ArgWSSizeCutoff: Threshold to stop applying wssize (n, d, s).
 	ArgWSSizeCutoff            = "--wssize-cutoff"
+	// ArgWSSizeForcedCutoff: If 1 (default), auto cutoff wssize on known protocol.
 	ArgWSSizeForcedCutoff      = "--wssize-forced-cutoff"
+	// ArgHostCase: Change Host: => host: in HTTP.
 	ArgHostCase                = "--hostcase"
+	// ArgHostSpell: Exact spelling of "Host" header (4 chars).
 	ArgHostSpell               = "--hostspell"
+	// ArgHostNoSpace: Remove space after Host: header.
 	ArgHostNoSpace             = "--hostnospace"
+	// ArgDomCase: Mix case of domain name in Host header.
 	ArgDomCase                 = "--domcase"
+	// ArgMethodEol: Add \n before HTTP method.
 	ArgMethodEol               = "--methodeol"
+	// ArgIpId: IPv4 IP_ID assignment: zero, seq, seqgroup, rnd.
 	ArgIpId                    = "--ip-id"
+	// ArgSynAckSplit: Perform TCP split handshake: syn, synack, acksyn.
 	ArgSynAckSplit             = "--synack-split"
+	// ArgDup: Duplicate original packets N times.
 	ArgDup                     = "--dup"
+	// ArgDupReplace: If 1, do not send original packet, only dups.
 	ArgDupReplace              = "--dup-replace"
+	// ArgDupTTL: TTL for duplicated packets.
 	ArgDupTTL                  = "--dup-ttl"
+	// ArgDupTTL6: Hop Limit for IPv6 duplicated packets.
 	ArgDupTTL6                 = "--dup-ttl6"
+	// ArgDupAutoTTL: Auto TTL mode for duplicates.
 	ArgDupAutoTTL              = "--dup-autottl"
+	// ArgDupAutoTTL6: Overrides ArgDupAutoTTL for IPv6.
 	ArgDupAutoTTL6             = "--dup-autottl6"
+	// ArgDupFooling: Fooling modes for duplicates.
 	ArgDupFooling              = "--dup-fooling"
+	// ArgDupTsInc: TSVal increment for duplicates.
 	ArgDupTsInc                = "--dup-ts-increment"
+	// ArgDupBadSeqInc: Seq increment for duplicates.
 	ArgDupBadSeqInc            = "--dup-badseq-increment"
+	// ArgDupBadAckInc: Ack increment for duplicates.
 	ArgDupBadAckInc            = "--dup-badack-increment"
+	// ArgDupIpId: IP_ID mode for duplicates.
 	ArgDupIpId                 = "--dup-ip-id"
+	// ArgDupStart: Start duplicating after N packets.
 	ArgDupStart                = "--dup-start"
+	// ArgDupCutoff: Stop duplicating after N packets.
 	ArgDupCutoff               = "--dup-cutoff"
+	// ArgDupTcpFlagsSet: Set TCP flags for duplicates.
 	ArgDupTcpFlagsSet          = "--dup-tcp-flags-set"
+	// ArgDupTcpFlagsUnset: Unset TCP flags for duplicates.
 	ArgDupTcpFlagsUnset        = "--dup-tcp-flags-unset"
+	// ArgOrigTTL: Set TTL for original packets.
 	ArgOrigTTL                 = "--orig-ttl"
+	// ArgOrigTTL6: Set Hop Limit for IPv6 original packets.
 	ArgOrigTTL6                = "--orig-ttl6"
+	// ArgOrigAutoTTL: Auto TTL mode for original packets.
 	ArgOrigAutoTTL             = "--orig-autottl"
+	// ArgOrigAutoTTL6: Overrides ArgOrigAutoTTL for IPv6.
 	ArgOrigAutoTTL6            = "--orig-autottl6"
+	// ArgOrigModStart: Start modding original packets after N packets.
 	ArgOrigModStart            = "--orig-mod-start"
+	// ArgOrigModCutoff: Stop modding original packets after N packets.
 	ArgOrigModCutoff           = "--orig-mod-cutoff"
+	// ArgOrigTcpFlagsSet: Set TCP flags for original packets.
 	ArgOrigTcpFlagsSet         = "--orig-tcp-flags-set"
+	// ArgOrigTcpFlagsUnset: Unset TCP flags for original packets.
 	ArgOrigTcpFlagsUnset       = "--orig-tcp-flags-unset"
 )
 
