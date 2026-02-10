@@ -85,6 +85,7 @@ const (
 	ReasonTLSCipherSuite      FailureReason = "tls_cipher_suite"      // Сервер выбрал cipher suite, который клиент не предлагал — MitM / broken middlebox
 	ReasonTLSRecordOverflow   FailureReason = "tls_record_overflow"   // TLS record overflow — DPI инжектировал данные или повредил запись
 	ReasonTLSIllegalParam     FailureReason = "tls_illegal_param"     // Illegal parameter в handshake — DPI подменил/повредил поле
+	ReasonTLSCertExpired      FailureReason = "tls_cert_expired"      // Сертификат истёк или ещё не валиден — MITM с просроченным сертификатом
 )
 
 func (r FailureReason) IsTLS() bool {
