@@ -21,6 +21,7 @@ import (
 
 	"github.com/quic-go/quic-go/http3"
 	"github.com/rs/zerolog"
+	"github.com/valyala/fasthttp"
 )
 
 const (
@@ -53,7 +54,7 @@ func failResult(reason model.FailureReason, detail string) checkResult {
 }
 
 type httpClients struct {
-	tcp  *http.Client
+	tcp  *fasthttp.Client
 	quic *http.Client
 }
 
@@ -123,21 +124,19 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 }
 
 func initClients() *httpClients {
-	tcpTransport := &http.Transport{
-		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
-		DisableKeepAlives: true,
-		DialContext: (&net.Dialer{
-			KeepAlive: HardTimeout,
-		}).DialContext,
-		ForceAttemptHTTP2: true,
-	}
-
 	quicTransport := &http3.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
 
 	return &httpClients{
-		tcp:  &http.Client{Transport: tcpTransport},
+		tcp: &fasthttp.Client{
+			TLSConfig:                     &tls.Config{InsecureSkipVerify: true},
+			MaxConnsPerHost:               64,
+			ReadTimeout:                   HardTimeout,
+			WriteTimeout:                  HardTimeout,
+			MaxResponseBodySize:           128 * 1024,
+			DisableHeaderNamesNormalizing: true,
+		},
 		quic: &http.Client{Transport: quicTransport},
 	}
 }
@@ -151,12 +150,99 @@ func dispatchCheck(ctx context.Context, t types.Target, clients *httpClients) ch
 	case types.ProtoSTUN:
 		return checkSTUN(ctx, t)
 	case types.ProtoTCP:
-		return checkHTTP(ctx, t, clients.tcp)
+		return checkFastHTTP(t, clients.tcp)
 	case types.ProtoQUIC:
 		return checkHTTP(ctx, t, clients.quic)
 	default:
 		return failResult(model.ReasonUnknown, "unsupported protocol")
 	}
+}
+
+func checkFastHTTP(t types.Target, client *fasthttp.Client) checkResult {
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.SetRequestURI(t.URL)
+	req.Header.SetMethod("GET")
+	req.Header.Set("User-Agent", UserAgent)
+
+	start := time.Now()
+	err := client.DoTimeout(req, resp, t.Timeout)
+	if err != nil {
+		if errors.Is(err, fasthttp.ErrBodyTooLarge) {
+			// Body exceeded MaxResponseBodySize — connection works, data flows.
+			return okResult
+		}
+		return failResult(analyzeFasthttpError(err), err.Error())
+	}
+
+	statusCode := resp.StatusCode()
+	if !t.IgnoreStatus && (statusCode < fasthttp.StatusOK || statusCode >= fasthttp.StatusBadRequest) {
+		return failResult(model.ReasonReset, fmt.Sprintf("HTTP %d", statusCode))
+	}
+
+	body := resp.Body()
+	readTotal := len(body)
+
+	if readTotal < t.Threshold {
+		return failResult(model.ReasonReset, fmt.Sprintf("short body: %d/%d bytes", readTotal, t.Threshold))
+	}
+
+	totalTime := time.Since(start).Seconds()
+	if totalTime > 0 {
+		speed := float64(readTotal) / totalTime
+
+		minSpeed := t.MinSpeed
+		if minSpeed == 0 {
+			minSpeed = DefaultMinSpeed
+		}
+
+		if speed < minSpeed && readTotal > MinDataForSpeedCheck {
+			return failResult(model.ReasonThrottle, fmt.Sprintf("%.1f KB/s (min %.1f KB/s)", speed/1024, minSpeed/1024))
+		}
+	}
+
+	return okResult
+}
+
+func analyzeFasthttpError(err error) model.FailureReason {
+	if err == nil {
+		return model.ReasonNone
+	}
+	if errors.Is(err, fasthttp.ErrTimeout) {
+		return model.ReasonTimeout
+	}
+	if errors.Is(err, fasthttp.ErrConnectionClosed) {
+		return model.ReasonReset
+	}
+
+	msg := err.Error()
+
+	// fasthttp dial/tls timeouts not caught by ErrTimeout
+	if strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout") {
+		return model.ReasonTimeout
+	}
+
+	// DPI TLS corruption
+	if strings.Contains(msg, "tls: bad record MAC") ||
+		strings.Contains(msg, "tls: error decrypting message") ||
+		strings.Contains(msg, "tls: error decoding message") ||
+		strings.Contains(msg, "tls: handshake failure") ||
+		strings.Contains(msg, "tls: internal error") ||
+		strings.Contains(msg, "tls: server did not echo the legacy session ID") ||
+		strings.Contains(msg, "tls: unrecognized name") ||
+		strings.Contains(msg, "tls: server advertised unrequested ALPN extension") {
+		return model.ReasonTLS
+	}
+
+	// Connection abruptly closed
+	if strings.Contains(msg, "unexpected EOF") {
+		return model.ReasonReset
+	}
+
+	return analyzeError(err)
 }
 
 func checkHTTP(ctx context.Context, t types.Target, client *http.Client) checkResult {
@@ -316,6 +402,8 @@ func summarizeResults(passed, failed []string, targets []types.Target, errorCoun
 	if len(passed) == 0 && len(failed) > 0 {
 		if errorCounts[model.ReasonReset] > 0 {
 			finalReason = model.ReasonReset
+		} else if errorCounts[model.ReasonTLS] > 0 {
+			finalReason = model.ReasonTLS
 		} else if errorCounts[model.ReasonThrottle] > 0 {
 			finalReason = model.ReasonThrottle
 		} else if errorCounts[model.ReasonTimeout] > 0 {

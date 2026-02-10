@@ -62,5 +62,6 @@ const (
 	ReasonTimeout  FailureReason = "timeout"  // DPI Drop or Blackhole
 	ReasonReset    FailureReason = "reset"    // DPI Active Reject
 	ReasonThrottle FailureReason = "throttle" // DPI Shaping/Slowdown
+	ReasonTLS      FailureReason = "tls"      // DPI TLS Corruption (bad MAC, decrypt error, handshake failure)
 	ReasonUnknown  FailureReason = "unknown"
 )

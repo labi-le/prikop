@@ -3,8 +3,6 @@ package tcp16_20
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"prikop/internal/verifier/types"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/valyala/fasthttp"
 )
 
 const TargetsDir = "/app/targets"
@@ -36,7 +35,11 @@ func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]types.Pro
 	if shouldFetchCIDRs {
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, 5)
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := &fasthttp.Client{
+			ReadTimeout:    30 * time.Second,
+			WriteTimeout:   30 * time.Second,
+			ReadBufferSize: 16384,
+		}
 
 		for i := range result {
 			if result[i].CIDRSource == "" {
@@ -95,21 +98,24 @@ func saveCIDRsToFile(path string, cidrs []string) error {
 	return nil
 }
 
-func downloadCIDRs(client *http.Client, url string) ([]string, error) {
-	resp, err := client.Get(url)
-	if err != nil {
+func downloadCIDRs(client *fasthttp.Client, rawURL string) ([]string, error) {
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
+	resp := fasthttp.AcquireResponse()
+	defer fasthttp.ReleaseResponse(resp)
+
+	req.SetRequestURI(rawURL)
+	req.Header.SetMethod("GET")
+
+	if err := client.DoRedirects(req, resp, 10); err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("status code %d", resp.StatusCode)
+	if resp.StatusCode() != 200 {
+		return nil, fmt.Errorf("status code %d", resp.StatusCode())
 	}
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
+	body := resp.Body()
 
 	type fastlyResp struct {
 		Addresses     []string `json:"addresses"`
