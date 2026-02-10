@@ -15,10 +15,6 @@ type GeneralVerifier struct {
 	Log     zerolog.Logger
 }
 
-func NewGeneralVerifier(mode string, log zerolog.Logger) *GeneralVerifier {
-	return &GeneralVerifier{Mode: mode, Log: log}
-}
-
 func (v *GeneralVerifier) Name() string {
 	return fmt.Sprintf("Verifier (%s)", v.Mode)
 }

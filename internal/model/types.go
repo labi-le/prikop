@@ -62,6 +62,26 @@ const (
 	ReasonTimeout  FailureReason = "timeout"  // DPI Drop or Blackhole
 	ReasonReset    FailureReason = "reset"    // DPI Active Reject
 	ReasonThrottle FailureReason = "throttle" // DPI Shaping/Slowdown
-	ReasonTLS      FailureReason = "tls"      // DPI TLS Corruption (bad MAC, decrypt error, handshake failure)
+	ReasonDNS      FailureReason = "dns"      // DNS resolution failure
 	ReasonUnknown  FailureReason = "unknown"
+
+	ReasonTLSALPN             FailureReason = "tls_alpn"              // DPI навязал ALPN (h2/http1.1) без запроса
+	ReasonTLSVersion          FailureReason = "tls_version"           // Блокировка TLS 1.3 / downgrade attack
+	ReasonTLSNotTLS           FailureReason = "tls_not_tls"           // DPI вернул HTML-заглушку или мусор вместо ServerHello
+	ReasonTLSOversized        FailureReason = "tls_oversized"         // Oversized record — DPI склеил пакеты или plain-text ответ
+	ReasonTLSCertUnknown      FailureReason = "tls_cert_unknown"      // MITM — сертификат от неизвестного CA
+	ReasonTLSCertMismatch     FailureReason = "tls_cert_mismatch"     // MITM — имя в сертификате не совпадает
+	ReasonTLSBadMAC           FailureReason = "tls_bad_mac"           // DPI повредил MAC записи
+	ReasonTLSDecrypt          FailureReason = "tls_decrypt"           // Ошибка расшифровки сообщения
+	ReasonTLSAlertUnexpected  FailureReason = "tls_alert_unexpected"  // Нарушение порядка сообщений (state machine error)
+	ReasonTLSHandshake        FailureReason = "tls_handshake"         // Общий сбой handshake
+	ReasonTLSInternal         FailureReason = "tls_internal"          // Remote TLS internal error
+	ReasonTLSSessionID        FailureReason = "tls_session_id"        // Сервер не вернул legacy session ID
+	ReasonTLSUnrecognizedName FailureReason = "tls_unrecognized_name" // SNI mismatch / DPI spoofed alert
+	ReasonTLSDowngrade        FailureReason = "tls_downgrade"         // Downgrade attempt detected — MitM или broken middlebox
+	ReasonTLSBadSignature     FailureReason = "tls_bad_signature"     // Невалидная подпись сертификата — MitM подмена
 )
+
+func (r FailureReason) IsTLS() bool {
+	return len(r) > 4 && r[:4] == "tls_"
+}

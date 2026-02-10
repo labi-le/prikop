@@ -211,38 +211,123 @@ func analyzeFasthttpError(err error) model.FailureReason {
 	if err == nil {
 		return model.ReasonNone
 	}
+
 	if errors.Is(err, fasthttp.ErrTimeout) {
 		return model.ReasonTimeout
 	}
-	if errors.Is(err, fasthttp.ErrConnectionClosed) {
-		return model.ReasonReset
-	}
-
-	msg := err.Error()
-
-	// fasthttp dial/tls timeouts not caught by ErrTimeout
-	if strings.Contains(msg, "timed out") || strings.Contains(msg, "timeout") {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return model.ReasonTimeout
 	}
 
-	// DPI TLS corruption
-	if strings.Contains(msg, "tls: bad record MAC") ||
-		strings.Contains(msg, "tls: error decrypting message") ||
-		strings.Contains(msg, "tls: error decoding message") ||
-		strings.Contains(msg, "tls: handshake failure") ||
-		strings.Contains(msg, "tls: internal error") ||
-		strings.Contains(msg, "tls: server did not echo the legacy session ID") ||
-		strings.Contains(msg, "tls: unrecognized name") ||
-		strings.Contains(msg, "tls: server advertised unrequested ALPN extension") {
-		return model.ReasonTLS
+	if errors.Is(err, fasthttp.ErrConnectionClosed) {
+		return model.ReasonReset
 	}
-
-	// Connection abruptly closed
-	if strings.Contains(msg, "unexpected EOF") {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return model.ReasonReset
 	}
 
-	return analyzeError(err)
+	var syscallErr *os.SyscallError
+	if errors.As(err, &syscallErr) {
+		if errors.Is(syscallErr.Err, syscall.ECONNRESET) ||
+			errors.Is(syscallErr.Err, syscall.ECONNABORTED) ||
+			errors.Is(syscallErr.Err, syscall.EPIPE) {
+			return model.ReasonReset
+		}
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return model.ReasonDNS
+	}
+
+	// 2. Парсинг строковых сообщений (String Matching)
+	// Это необходимо, так как crypto/tls возвращает простые errors.New()
+	msg := err.Error()
+
+	// --- TLS: Вмешательство DPI (Specific Interventions) ---
+
+	// Самая частая ошибка РКН/ТСПУ: навязывание ALPN (h2/http1.1) без запроса
+	if strings.Contains(msg, "server advertised unrequested ALPN extension") {
+		return model.ReasonTLSALPN
+	}
+
+	// Блокировка TLS 1.3 или попытка понизить версию (Downgrade Attack)
+	if strings.Contains(msg, "protocol version not supported") ||
+		strings.Contains(msg, "remote error: protocol version") {
+		return model.ReasonTLSVersion
+	}
+
+	// Ответ не похож на TLS (DPI вернул HTML-заглушку или мусор вместо ServerHello)
+	if strings.Contains(msg, "first record does not look like a TLS handshake") {
+		return model.ReasonTLSNotTLS
+	}
+
+	// Слишком длинная запись (DPI склеил пакеты или сервер ответил plain-text'ом на TLS запрос)
+	// Часто бывает, если ttl фейка слишком большой и он дошел до сервера
+	if strings.Contains(msg, "oversized record received") {
+		return model.ReasonTLSOversized
+	}
+
+	// MITM
+	if strings.Contains(msg, "certificate signed by unknown authority") {
+		return model.ReasonTLSCertUnknown
+	}
+
+	// MITM: name mismatch
+	if strings.Contains(msg, "certificate is valid for") ||
+		strings.Contains(msg, "x509: certificate is not valid for any names") {
+		return model.ReasonTLSCertMismatch
+	}
+
+	// MITM: invalid signature
+	if strings.Contains(msg, "invalid signature") {
+		return model.ReasonTLSBadSignature
+	}
+
+	// Downgrade attack detected by crypto/tls
+	if strings.Contains(msg, "downgrade attempt detected") {
+		return model.ReasonTLSDowngrade
+	}
+
+	if strings.Contains(msg, "bad record MAC") || strings.Contains(msg, "tls: bad record MAC") {
+		return model.ReasonTLSBadMAC
+	}
+
+	if strings.Contains(msg, "error decrypting message") {
+		return model.ReasonTLSDecrypt
+	}
+
+	// Нарушение порядка сообщений (State Machine Error) - бывает из-за --dpi-desync=disorder
+	if strings.Contains(msg, "remote error: unexpected message") {
+		return model.ReasonTLSAlertUnexpected
+	}
+
+	if strings.Contains(msg, "tls: handshake failure") {
+		return model.ReasonTLSHandshake
+	}
+	if strings.Contains(msg, "tls: internal error") {
+		return model.ReasonTLSInternal
+	}
+	if strings.Contains(msg, "server did not echo the legacy session ID") {
+		return model.ReasonTLSSessionID
+	}
+	if strings.Contains(msg, "unrecognized name") {
+		return model.ReasonTLSUnrecognizedName
+	}
+
+	if strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection refused") {
+		return model.ReasonReset
+	}
+
+	if strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "Client.Timeout exceeded") {
+		return model.ReasonTimeout
+	}
+
+	return analyzeError(err) // Используем ваш базовый анализатор как fallback
 }
 
 func checkHTTP(ctx context.Context, t types.Target, client *http.Client) checkResult {
@@ -402,14 +487,20 @@ func summarizeResults(passed, failed []string, targets []types.Target, errorCoun
 	if len(passed) == 0 && len(failed) > 0 {
 		if errorCounts[model.ReasonReset] > 0 {
 			finalReason = model.ReasonReset
-		} else if errorCounts[model.ReasonTLS] > 0 {
-			finalReason = model.ReasonTLS
 		} else if errorCounts[model.ReasonThrottle] > 0 {
 			finalReason = model.ReasonThrottle
 		} else if errorCounts[model.ReasonTimeout] > 0 {
 			finalReason = model.ReasonTimeout
 		} else {
+			// Pick the most frequent TLS sub-reason, or unknown
 			finalReason = model.ReasonUnknown
+			maxCount := 0
+			for reason, count := range errorCounts {
+				if reason.IsTLS() && count > maxCount {
+					finalReason = reason
+					maxCount = count
+				}
+			}
 		}
 	}
 
