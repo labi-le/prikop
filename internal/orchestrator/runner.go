@@ -11,6 +11,7 @@ import (
 	"prikop/internal/verifier/tcp16_20"
 	"prikop/internal/verifier/types"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/moby/moby/client"
@@ -138,37 +139,53 @@ func definePhases(providers []types.ProviderDefinition, log zerolog.Logger) []Ph
 }
 
 func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []string, report model.ReconReport, log zerolog.Logger) {
+	var mu sync.Mutex
 	var finalConfigs []config
-	configIndex := 1
+
+	sem := make(chan struct{}, model.MaxConcurrentProviders)
+	var wg sync.WaitGroup
 
 	for _, p := range phases {
 		if ctx.Err() != nil {
-			return
+			break
 		}
 
-		phaseLogger := log.With().Str("phase", p.Name).Logger()
-		phaseLogger.Info().Msg("Executing phase")
+		wg.Add(1)
+		go func(p Phase) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
-		best := opt.RunPhase(ctx, p.Group, bins, p.Gens, report, p.Filters)
-		if ctx.Err() != nil {
-			return
-		}
+			if ctx.Err() != nil {
+				return
+			}
 
-		if best != nil && best.Result.SuccessCount > 0 {
-			strategyArgs := best.Config.String()
-			phaseLogger.Info().Str("winner", strategyArgs).Msg("Phase finished with a winning strategy")
-			block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
+			phaseLogger := log.With().Str("phase", p.Name).Logger()
+			phaseLogger.Info().Msg("Executing phase")
 
-			finalConfigs = append(finalConfigs, config{
-				Config:   block,
-				Provider: p.Name,
-			})
-			configIndex++
-		} else {
-			phaseLogger.Warn().Msg("Phase failed: No working strategy found")
-		}
+			best := opt.RunPhase(ctx, p.Group, bins, p.Gens, report, p.Filters)
+			if ctx.Err() != nil {
+				return
+			}
+
+			if best != nil && best.Result.SuccessCount > 0 {
+				strategyArgs := best.Config.String()
+				phaseLogger.Info().Str("winner", strategyArgs).Msg("Phase finished with a winning strategy")
+				block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
+
+				mu.Lock()
+				finalConfigs = append(finalConfigs, config{
+					Config:   block,
+					Provider: p.Name,
+				})
+				mu.Unlock()
+			} else {
+				phaseLogger.Warn().Msg("Phase failed: No working strategy found")
+			}
+		}(p)
 	}
 
+	wg.Wait()
 	printFinalConfig(finalConfigs)
 }
 

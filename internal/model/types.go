@@ -5,20 +5,21 @@ import (
 )
 
 const (
-	QueueNum          = "200"
-	ImageName         = "prikop:latest"
-	ContainerTimeout  = 15 * time.Second
-	MaxWorkers        = 50
-	CheckTimeout      = 4000 * time.Millisecond
-	TargetSuccessRate = 80
-	WorkerMemoryLimit = 60 * 1024 * 1024 // 60 MB
-	SocketDir         = "/var/run/prikop"
+	QueueNum               = "200"
+	ImageName              = "prikop:latest"
+	ContainerTimeout       = 15 * time.Second
+	MaxWorkers             = 25
+	MaxConcurrentProviders = 3
+	CheckTimeout           = 4000 * time.Millisecond
+	TargetSuccessRate      = 80
+	WorkerMemoryLimit      = 60 * 1024 * 1024 // 60 MB
+	SocketDir              = "/var/run/prikop"
 )
 
 // WorkerRequest отправляется оркестратором воркеру
 type WorkerRequest struct {
 	StrategyArgs []string `json:"strategy_args"`
-	Filters      []string `json:"filters"` // NEW FIELD
+	Filters      []string `json:"filters"`
 	TargetGroup  string   `json:"target_group"`
 }
 
