@@ -305,8 +305,16 @@ func analyzeFasthttpError(err error) model.FailureReason {
 		return model.ReasonTLSCipherSuite
 	}
 
+	if strings.Contains(msg, "record overflow") {
+		return model.ReasonTLSRecordOverflow
+	}
+
+	if strings.Contains(msg, "illegal parameter") {
+		return model.ReasonTLSIllegalParam
+	}
+
 	// Нарушение порядка сообщений (State Machine Error) - бывает из-за --dpi-desync=disorder
-	if strings.Contains(msg, "remote error: unexpected message") {
+	if strings.Contains(msg, "unexpected message") {
 		return model.ReasonTLSAlertUnexpected
 	}
 

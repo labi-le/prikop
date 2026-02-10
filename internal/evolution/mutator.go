@@ -44,7 +44,6 @@ const (
 
 	ProbFoolingFlip  = 0.3
 	ProbFoolingRisky = 0.05
-	// ProbFoolingHopByHop removed: IPv6 specific
 
 	ProbFakeTCPTLS     = 0.8
 	ProbFakeTCPSynData = 0.9
@@ -82,62 +81,141 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 	r := rand.Float64()
 	m.sanitize(s)
 
-	// DPI активно сбрасывает соединение (RST).
-	// Значит, он видит сигнатуру. Нужно ломать структуру пакета (Split) или менять Fake.
-	if feedback == model.ReasonReset {
-		if r < ProbResetSplit {
-			m.mutateSplit(s) // Самый эффективный способ против RST
-		} else if r < ProbResetFake {
-			m.mutateFake(s) // Меняем "обертку"
-		} else {
-			m.mutateFooling(s) // Меняем TTL/BadSum
-		}
-		m.sanitize(s)
-		return
-	}
+	switch feedback {
+	// === ГРУППА 1: ЖЕСТКАЯ БЛОКИРОВКА (Signature Match) ===
+	// DPI распознал протокол и разорвал/подменил соединение.
+	// Решение: Агрессивное изменение Fake или Split для скрытия сигнатуры.
+	case model.ReasonReset,
+		model.ReasonTLSNotTLS,           // Вернулась заглушка
+		model.ReasonTLSOversized,        // Склейка пакетов DPI
+		model.ReasonTLSUnrecognizedName: // SNI mismatch (спуфинг от DPI)
 
-	// DPI дропает пакеты (Timeout).
-	// Скорее всего, мы сломали DPI, но пакет не дошел. Нужно менять параметры доставки.
-	if feedback == model.ReasonTimeout {
-		if r < ProbTimeoutRepeat {
+		if r < 0.5 {
+			m.mutateSplit(s) // Меняем точку разрыва (смещаем SNI)
+		} else if r < 0.8 {
+			m.mutateFake(s) // Меняем Fake (сигнатуру мусора)
+		} else {
+			m.mutateTamper(s) // Включаем tamper (изменение заголовков)
+		}
+
+	// === ГРУППА 2: ПОТЕРЯ ПАКЕТОВ / ТАЙМАУТЫ ===
+	// Пакеты не доходят или дропаются тихо.
+	// Решение: Изменение параметров доставки (TTL, Repeats, Mode).
+	case model.ReasonTimeout,
+		model.ReasonTLSHandshake,
+		model.ReasonTLSInternal:
+
+		if r < 0.4 {
 			m.mutateRepeats(s) // Больше повторов
-		} else if r < ProbTimeoutMode {
-			m.mutateMode(s) // Смена режима доставки
+		} else if r < 0.7 {
+			m.mutateMode(s) // Смена режима доставки (fake -> split)
 		} else {
-			m.mutateTTL(s) // Возможно, проблема в TTL
+			m.mutateTTL(s) // Проблема в TTL
 		}
-		m.sanitize(s)
-		return
-	}
 
-	// Случайная мутация (нет обратной связи или успех)
-	choice := rand.Intn(100)
-	switch {
-	case choice < ProbMutateSplit:
-		m.mutateSplit(s) // Split теперь умнее, даем ему приоритет
-	case choice < ProbMutateFake:
-		m.mutateFake(s)
-	case choice < ProbMutateMode:
-		m.mutateMode(s)
-		if strings.Contains(s.Mode, "fake") {
-			m.mutateFake(s)
+	// === ГРУППА 3: MITM / ВМЕШАТЕЛЬСТВО (Intervention) ===
+	// DPI пытается вклиниться в рукопожатие, понизить версию или подменить сертификат.
+	// Решение: Ломать синхронизацию (SynAck), Disorder (путать сборщик DPI), WSS.
+	case model.ReasonTLSALPN,
+		model.ReasonTLSVersion,
+		model.ReasonTLSCipherSuite, // <--- MITM: Сервер выбрал шифр, который клиент не предлагал
+		model.ReasonTLSDowngrade,
+		model.ReasonTLSCertUnknown,
+		model.ReasonTLSCertMismatch,
+		model.ReasonTLSBadSignature,
+		model.ReasonTLSSessionID:
+
+		if !strings.Contains(s.Mode, "synack") && r < 0.4 {
+			s.Mode += ",synack" // Ломаем начало соединения
+		} else if r < 0.7 {
+			m.mutateWSS(s) // Форсируем сплит ответа сервера
+		} else {
+			// Disorder эффективен против MITM, так как DPI не может собрать поток
+			if !strings.Contains(s.Mode, "disorder") {
+				s.Mode = strings.ReplaceAll(s.Mode, "split", "disorder")
+				if !strings.Contains(s.Mode, "disorder") {
+					s.Mode = "multidisorder"
+				}
+				m.mutateSplit(s)
+			} else {
+				// Если уже disorder, меняем параметры перекрытия
+				s.Split.SeqOvl = magicSeqOvls[rand.Intn(len(magicSeqOvls))]
+			}
 		}
-	case choice < ProbMutateFooling:
-		m.mutateFooling(s)
-	case choice < ProbMutateTamper:
-		m.mutateTamper(s)
-	case choice < ProbMutateTTL:
-		m.mutateTTL(s)
+
+	// === ГРУППА 4: ПОВРЕЖДЕНИЕ ДАННЫХ (Corruption) ===
+	// Мы сломали пакет так, что сервер или клиент не могут его прочитать.
+	// Решение: УПРОЩЕНИЕ (Simplification). Откат агрессивных методов.
+	case model.ReasonTLSBadMAC,
+		model.ReasonTLSDecrypt,
+		model.ReasonTLSDecode,
+		model.ReasonTLSAlertUnexpected:
+
+		m.mutateSimplify(s)
+
+	// === ГРУППА 5: ШЕЙПИНГ ===
+	case model.ReasonThrottle:
+		m.mutateWSS(s) // Меняем размер окна, чтобы сбить шейпер
+		if r < 0.5 {
+			m.mutateSplit(s)
+		}
+
+	// === DEFAULT / RANDOM ===
 	default:
-		m.mutateGlobal(s)
+		choice := rand.Intn(100)
+		switch {
+		case choice < ProbMutateSplit:
+			m.mutateSplit(s)
+		case choice < ProbMutateFake:
+			m.mutateFake(s)
+		case choice < ProbMutateMode:
+			m.mutateMode(s)
+			if strings.Contains(s.Mode, "fake") {
+				m.mutateFake(s)
+			}
+		case choice < ProbMutateFooling:
+			m.mutateFooling(s)
+		case choice < ProbMutateTamper:
+			m.mutateTamper(s)
+		case choice < ProbMutateTTL:
+			m.mutateTTL(s)
+		default:
+			m.mutateGlobal(s)
+		}
 	}
 
 	m.sanitize(s)
 }
 
+// mutateSimplify уменьшает агрессивность стратегии, если она вызывает ошибки протокола
+func (m *Mutator) mutateSimplify(s *nfqws.Strategy) {
+	// 1. Отключаем BadSum/BadSeq (частая причина поломок за NAT)
+	s.Fooling.BadSum = false
+	s.Fooling.BadSeq = false
+
+	// 2. Disorder -> Split (Disorder часто ломает стейт TLS 1.3)
+	if strings.Contains(s.Mode, "disorder") {
+		s.Mode = strings.ReplaceAll(s.Mode, "multidisorder", "multisplit")
+		s.Mode = strings.ReplaceAll(s.Mode, "fakeddisorder", "fakedsplit")
+		s.Mode = strings.ReplaceAll(s.Mode, "disorder", "split")
+	}
+
+	// 3. Уменьшаем перекрытие (SeqOvl), если оно есть
+	if s.Split.SeqOvl > 0 {
+		s.Split.SeqOvl = 0 // Выключаем перекрытие, так как оно может портить данные
+	}
+
+	// 4. Сбрасываем repeats до минимума, чтобы снизить шум
+	s.Repeats = 1
+
+	// 5. Если есть фейк, пробуем сделать его стандартным
+	if strings.Contains(s.Mode, "fake") {
+		s.Fake.TlsMod = "" // Убираем модификаторы фейка
+	}
+}
+
 func (m *Mutator) sanitize(s *nfqws.Strategy) {
 	modes := strings.Split(s.Mode, ",")
-	// ipv6 specific modes removed from sanitation logic to prevent them from being kept
 	var p0, p1, p2 []string
 
 	for _, raw := range modes {
@@ -150,7 +228,7 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 		case "syndata", "synack":
 			p0 = append(p0, mode)
 		case "hopbyhop", "destopt", "ipfrag1":
-			// Explicitly ignore IPv6 specific modes to enforce IPv4 compatibility
+			// Explicitly ignore IPv6 specific modes
 			continue
 		case "fake", "fakeknown", "rst", "rstack":
 			p1 = append(p1, mode)
@@ -166,7 +244,6 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 	if len(p0) > 0 {
 		finalModes = append(finalModes, p0[0])
 	}
-	// IPv6 extension headers are skipped
 	if len(p1) > 0 {
 		finalModes = append(finalModes, p1[0])
 	}
@@ -230,7 +307,6 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 		s.Repeats = MaxRepeatsOverall
 	}
 
-	// Enforce IPv4-only fooling
 	s.Fooling.HopByHop = false
 	s.Fooling.HopByHop2 = false
 }
@@ -244,10 +320,8 @@ func (m *Mutator) mutateMode(s *nfqws.Strategy) {
 			"fake", "multisplit", "multidisorder",
 			"hostfakesplit", "syndata",
 		}
-		// Removed "hopbyhop", "destopt" - they are IPv6 specific
 		secondaryModes = []string{"tamper", "rst"}
 	} else {
-		// "ipfrag2" is valid for IPv4, "ipfrag1" is IPv6 only
 		baseModes = []string{"fake", "multisplit", "udplen", "ipfrag2"}
 		secondaryModes = []string{"udplen", "ipfrag2"}
 	}

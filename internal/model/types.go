@@ -83,6 +83,8 @@ const (
 	ReasonTLSDowngrade        FailureReason = "tls_downgrade"         // Downgrade attempt detected — MitM или broken middlebox
 	ReasonTLSBadSignature     FailureReason = "tls_bad_signature"     // Невалидная подпись сертификата — MitM подмена
 	ReasonTLSCipherSuite      FailureReason = "tls_cipher_suite"      // Сервер выбрал cipher suite, который клиент не предлагал — MitM / broken middlebox
+	ReasonTLSRecordOverflow   FailureReason = "tls_record_overflow"   // TLS record overflow — DPI инжектировал данные или повредил запись
+	ReasonTLSIllegalParam     FailureReason = "tls_illegal_param"     // Illegal parameter в handshake — DPI подменил/повредил поле
 )
 
 func (r FailureReason) IsTLS() bool {
