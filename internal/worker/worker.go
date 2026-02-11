@@ -9,6 +9,7 @@ import (
 	"os"
 	"prikop/internal/model"
 	"prikop/internal/verifier"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -77,11 +78,22 @@ func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult
 	if cmd == nil {
 		return model.WorkerResult{Error: "nfqws start failed"}
 	}
-	defer KillCmd(cmd)
+
+	exitCh := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(exitCh)
+	}()
+	defer func() {
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		<-exitCh
+	}()
 
 	time.Sleep(50 * time.Millisecond)
-	if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+	select {
+	case <-exitCh:
 		return model.WorkerResult{Error: fmt.Sprintf("nfqws crashed: %s", stdout.String())}
+	default:
 	}
 
 	v := verifier.NewVerifier(req.TargetGroup, log)

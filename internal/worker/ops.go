@@ -30,7 +30,7 @@ func SetupIptables(group string) error {
 
 // Cleanup removes processes and flushes firewall
 func Cleanup() {
-	_ = exec.Command("pkill", "-9", "nfqws").Run()
+	_ = exec.Command("pkill", "nfqws").Run()
 	_ = exec.Command("iptables", "-F", "OUTPUT").Run()
 	_ = exec.Command("iptables", "-F", "INPUT").Run()
 }
@@ -52,14 +52,4 @@ func StartNFQWS(args []string) (*exec.Cmd, *bytes.Buffer) {
 		return nil, nil
 	}
 	return cmd, &out
-}
-
-// KillCmd force kills the process
-func KillCmd(cmd *exec.Cmd) {
-	if cmd != nil && cmd.Process != nil {
-		// Ignore error if process already dead
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		// Wait releases resources (zombies)
-		_ = cmd.Wait()
-	}
 }

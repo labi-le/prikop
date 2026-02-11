@@ -14,6 +14,9 @@ var (
 )
 
 func registerProvider(p types.ProviderDefinition) {
+	if p.Name != "constaaant" {
+		return
+	}
 	definitions = append(definitions, p)
 	GeneralTargets = append(GeneralTargets, p.Targets...)
 }

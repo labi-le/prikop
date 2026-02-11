@@ -102,14 +102,14 @@ func definePhases(providers []types.ProviderDefinition, log zerolog.Logger) []Ph
 	phases = append(phases, Phase{
 		Name:    "GOOGLE TCP",
 		Group:   "google_tcp",
-		Gens:    5,
+		Gens:    10,
 		Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", HostListPath),
 	})
 
 	phases = append(phases, Phase{
 		Name:    "GOOGLE UDP (QUIC)",
 		Group:   "google_udp",
-		Gens:    5,
+		Gens:    10,
 		Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
 	})
 

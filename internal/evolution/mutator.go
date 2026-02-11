@@ -284,7 +284,7 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 			}
 		}
 
-		if s.Fake.TLS == "" && s.Fake.Quic == "" && s.Fake.UnknownUdp == "" && s.Fake.SynData == "" && len(m.AvailableBins) > 0 {
+		if s.Fake.TLS == "" && s.Fake.Quic == "" && s.Fake.UnknownUdp == "" && s.Fake.SynData == "" {
 			m.mutateFake(s)
 		}
 
@@ -436,7 +436,7 @@ func (m *Mutator) mutateSplit(s *nfqws.Strategy) {
 		s.Split.SeqOvl = 1 + rand.Intn(5)
 	}
 
-	if rand.Float64() < ProbSplitBin && len(m.AvailableBins) > 0 {
+	if rand.Float64() < ProbSplitBin {
 		s.Split.Pattern = m.AvailableBins[rand.Intn(len(m.AvailableBins))]
 	}
 }
@@ -527,32 +527,30 @@ func (m *Mutator) mutateFooling(s *nfqws.Strategy) {
 	s.Fooling.HopByHop2 = false
 }
 
-func (m *Mutator) mutateFake(s *nfqws.Strategy) {
-	if len(m.AvailableBins) == 0 {
-		return
-	}
-
-	pickStrict := func(keywords ...string) string {
-		var candidates []string
-		for _, b := range m.AvailableBins {
-			for _, k := range keywords {
-				if strings.Contains(b, k) {
-					candidates = append(candidates, b)
-					break
-				}
+func (m *Mutator) pickStrict(keywords ...string) string {
+	var candidates []string
+	for _, b := range m.AvailableBins {
+		for _, k := range keywords {
+			if strings.Contains(b, k) {
+				candidates = append(candidates, b)
+				break
 			}
 		}
-		if len(candidates) > 0 {
-			return candidates[rand.Intn(len(candidates))]
-		}
-		return ""
 	}
+	if len(candidates) > 0 {
+		return candidates[rand.Intn(len(candidates))]
+	}
+	return ""
+}
 
-	pickAny := func() string { return m.AvailableBins[rand.Intn(len(m.AvailableBins))] }
+func (m *Mutator) pickAny() string {
+	return m.AvailableBins[rand.Intn(len(m.AvailableBins))]
+}
 
+func (m *Mutator) mutateFake(s *nfqws.Strategy) {
 	if m.Proto == "tcp" {
 		r := rand.Float64()
-		tlsBin := pickStrict("clienthello")
+		tlsBin := m.pickStrict("clienthello")
 
 		if tlsBin != "" && !strings.Contains(tlsBin, "dtls") && r < ProbFakeTCPTLS {
 			s.Fake.TLS = tlsBin
@@ -570,14 +568,14 @@ func (m *Mutator) mutateFake(s *nfqws.Strategy) {
 			if r < ProbFakeTCPSynData {
 				s.Fake.SynData = "0x00"
 			} else {
-				s.Fake.TLS = pickAny()
+				s.Fake.TLS = m.pickAny()
 			}
 			s.Fake.TlsMod = ""
 		}
 	} else {
 		r := rand.Float64()
 		if r < ProbFakeQUIC {
-			quicBin := pickStrict("quic")
+			quicBin := m.pickStrict("quic")
 			if quicBin != "" && !strings.Contains(quicBin, "short") {
 				s.Fake.Quic = quicBin
 				s.Fake.TlsMod = "rnd"
@@ -585,9 +583,9 @@ func (m *Mutator) mutateFake(s *nfqws.Strategy) {
 				return
 			}
 		}
-		s.Fake.UnknownUdp = pickStrict("wireguard", "dht", "stun", "512")
+		s.Fake.UnknownUdp = m.pickStrict("wireguard", "dht", "stun", "512")
 		if s.Fake.UnknownUdp == "" {
-			s.Fake.UnknownUdp = pickAny()
+			s.Fake.UnknownUdp = m.pickAny()
 		}
 		s.Fake.Quic = ""
 	}
