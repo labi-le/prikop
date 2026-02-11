@@ -106,12 +106,12 @@ func definePhases(providers []types.ProviderDefinition, log zerolog.Logger) []Ph
 		Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", HostListPath),
 	})
 
-	phases = append(phases, Phase{
-		Name:    "GOOGLE UDP (QUIC)",
-		Group:   "google_udp",
-		Gens:    10,
-		Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
-	})
+	// phases = append(phases, Phase{
+	// 	Name:    "GOOGLE UDP (QUIC)",
+	// 	Group:   "google_udp",
+	// 	Gens:    10,
+	// 	Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
+	// })
 
 	for _, p := range providers {
 		filters := "--filter-tcp=80,443"
@@ -119,7 +119,7 @@ func definePhases(providers []types.ProviderDefinition, log zerolog.Logger) []Ph
 		if p.CIDRFile != "" {
 			filters += fmt.Sprintf(" --ipset=%s", p.CIDRFile)
 		} else {
-			log.Warn().Str("provider", p.Name).Msg("Provider has no CIDR file, skipping specific filters")
+			log.Info().Str("provider", p.Name).Msg("Provider has no CIDR file, applying global filter (all traffic)")
 		}
 
 		gens := p.Gens

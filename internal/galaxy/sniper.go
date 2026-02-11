@@ -25,7 +25,6 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 			Split:   nfqws.SplitOptions{Pos: "1,sniext"},
 		})
 	}
-
 	if report.IPFragWorks {
 		population = append(population, nfqws.Strategy{
 			Mode: "ipfrag1", Repeats: 2,
@@ -33,15 +32,17 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 	}
 
 	if proto == "tcp" {
-		// 1. Генерируем стратегии, зависящие от контента (для ВСЕХ подходящих бинов)
+		// 1. Import Known High-Efficacy Strategies (Yv Series)
+		population = append(population, generateImportedStrategies(discoveredBins)...)
+		// 2. Generate content-dependent strategies
 		population = append(population, generateTCPBinDependent(tlsBins)...)
-		// 2. Генерируем статические стратегии (один раз)
+		// 3. Generate static strategies
 		population = append(population, generateTCPStatic()...)
 	} else {
 		population = append(population, generateUDPBinDependent(quicBins)...)
 	}
 
-	// 3. Добиваем популяцию процедурными стратегиями (перебор хостов + бинов)
+	// 4. Procedural fillers
 	population = append(population, generateProcedural(discoveredBins, proto)...)
 
 	return population
@@ -83,6 +84,222 @@ func findRelevantBins(bins []string, proto string) ([]string, []string) {
 	sortPriority(quicBins, "google")
 
 	return tlsBins, quicBins
+}
+
+func generateImportedStrategies(bins []string) []nfqws.Strategy {
+	find := func(name string) string {
+		for _, b := range bins {
+			if strings.HasSuffix(b, name) {
+				return b
+			}
+		}
+		return ""
+	}
+
+	googleClientHello := find("tls_clienthello_www_google_com.bin")
+
+	var s []nfqws.Strategy
+
+	// Yv01
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:   "multisplit",
+			Tamper: nfqws.TamperOptions{IpId: "zero"},
+			Split:  nfqws.SplitOptions{Pos: "1", SeqOvl: 681, Pattern: googleClientHello},
+		})
+	}
+
+	// Yv02
+	s = append(s, nfqws.Strategy{
+		Mode:  "multisplit",
+		Split: nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
+	})
+
+	// Yv03
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "fake,multisplit",
+			Split:   nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: googleClientHello},
+			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=ggpht.com"},
+			Fooling: nfqws.FoolingSet{BadSum: true, BadSeq: true},
+		})
+	}
+
+	// Yv04
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:  "split2",
+			Split: nfqws.SplitOptions{SeqOvl: 681, Pattern: googleClientHello},
+		})
+	}
+
+	// Yv05
+	gosuslugiClientHello := find("tls_clienthello_gosuslugi_ru.bin")
+	vkClientHello := find("tls_clienthello_vk_com.bin")
+	if googleClientHello != "" && vkClientHello != "" && gosuslugiClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode: "fake,fakeddisorder",
+			Split: nfqws.SplitOptions{
+				Pos:          "10,midsld",
+				SeqOvl:       336,
+				Pattern:      gosuslugiClientHello,
+				FakedPattern: vkClientHello,
+			},
+			Fake:    nfqws.FakeOptions{TLS: "0x0F0F0F0F", TlsMod: "none"},
+			Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: true, BadSeqIncrement: 0},
+		})
+	}
+
+	// Yv06
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "multidisorder",
+			Split:   nfqws.SplitOptions{Pos: "7,sld+1"},
+			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=www.google.com"},
+			Fooling: nfqws.FoolingSet{BadSeq: true},
+			TTL:     nfqws.TTLOptions{AutoStr: "2:2-12"},
+		})
+	}
+
+	// Yv07
+	s = append(s, nfqws.Strategy{
+		Mode:    "multidisorder",
+		Split:   nfqws.SplitOptions{Pos: "1,midsld,endhost-1"},
+		Repeats: 2,
+		Fooling: nfqws.FoolingSet{Md5Sig: true},
+		Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=www.google.com"},
+	})
+
+	// Yv08
+	s = append(s, nfqws.Strategy{
+		Mode:    "fake,multisplit",
+		Fake:    nfqws.FakeOptions{TLS: "!", TlsMod: "rnd,dupsid,sni=www.google.com"},
+		Split:   nfqws.SplitOptions{Pos: "1,midsld"},
+		Repeats: 2,
+		Fooling: nfqws.FoolingSet{BadSeq: true},
+	})
+
+	// Yv09
+	googleQuicInitial := find("quic_initial_www_google_com.bin")
+	if googleQuicInitial != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "multidisorder",
+			Split:   nfqws.SplitOptions{Pos: "1,midsld"},
+			Repeats: 6,
+			Fooling: nfqws.FoolingSet{BadSeq: true, BadSeqIncrement: 2},
+			Fake:    nfqws.FakeOptions{Quic: googleQuicInitial},
+		})
+	}
+
+	// Yv10
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:  "multisplit",
+			Split: nfqws.SplitOptions{Pos: "1,2", SeqOvl: 4, Pattern: googleClientHello},
+			Fake:  nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=www.google.com"},
+		})
+	}
+
+	// Yv11
+	s = append(s, nfqws.Strategy{
+		Mode:  "multidisorder",
+		Split: nfqws.SplitOptions{Pos: "2,5,105,host+5,sld-1,endsld-5,endsld"},
+	})
+
+	// Yv12
+	s = append(s, nfqws.Strategy{
+		Mode:    "multidisorder",
+		Split:   nfqws.SplitOptions{Pos: "1,midsld"},
+		Repeats: 2,
+	})
+
+	// Yv13
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "fake,multidisorder",
+			Split:   nfqws.SplitOptions{Pos: "1", SeqOvl: 681, Pattern: googleClientHello},
+			Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=fonts.google.com"},
+			Repeats: 2,
+			Fooling: nfqws.FoolingSet{BadSeq: true, BadSeqIncrement: 10000000},
+		})
+	}
+
+	// Yv14
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "fake,multidisorder",
+			Split:   nfqws.SplitOptions{Pos: "10,midsld", SeqOvl: 336, Pattern: googleClientHello},
+			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=fonts.google.com"},
+			Fooling: nfqws.FoolingSet{BadSeq: true},
+		})
+	}
+
+	// Yv15
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "fake,multisplit",
+			Split:   nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 2108, Pattern: googleClientHello},
+			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=ggpht.com"},
+			Fooling: nfqws.FoolingSet{BadSum: true, BadSeq: true},
+		})
+	}
+
+	// Yv16
+	s = append(s, nfqws.Strategy{
+		Mode:    "multisplit",
+		Split:   nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
+		Fooling: nfqws.FoolingSet{BadSum: true, BadSeq: true, BadSeqIncrement: 0},
+	})
+
+	// Yv17
+	s = append(s, nfqws.Strategy{
+		Mode:    "fakeddisorder",
+		Split:   nfqws.SplitOptions{Pos: "method+2"},
+		Fooling: nfqws.FoolingSet{Md5Sig: true},
+		Dup:     nfqws.DupOptions{Count: 1, Cutoff: "n2", Fooling: "md5sig"},
+	})
+
+	// Yv18
+	s = append(s, nfqws.Strategy{
+		Mode:    "fake,hostfakesplit",
+		Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=www.google.com"},
+		Split:   nfqws.SplitOptions{HostMod: "host=www.google.com,altorder=1"},
+		Fooling: nfqws.FoolingSet{Ts: true},
+		Tamper:  nfqws.TamperOptions{IpId: "zero"},
+	})
+
+	// Yv19
+	s = append(s, nfqws.Strategy{
+		Mode:    "hostfakesplit",
+		Split:   nfqws.SplitOptions{HostMod: "host=google.com"},
+		Fooling: nfqws.FoolingSet{Ts: true},
+	})
+
+	// Yv20
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "fake,fakedsplit",
+			Repeats: 6,
+			Fooling: nfqws.FoolingSet{Ts: true},
+			Tamper:  nfqws.TamperOptions{IpId: "zero"},
+			Split:   nfqws.SplitOptions{FakedPattern: "0x00"},
+			Fake:    nfqws.FakeOptions{TLS: googleClientHello},
+		})
+	}
+
+	// Yv21
+	if googleClientHello != "" {
+		s = append(s, nfqws.Strategy{
+			Mode:    "fake,multisplit",
+			Repeats: 8,
+			Fooling: nfqws.FoolingSet{Ts: true},
+			Tamper:  nfqws.TamperOptions{IpId: "zero"},
+			Split:   nfqws.SplitOptions{Pos: "1", SeqOvl: 681, Pattern: googleClientHello},
+			Fake:    nfqws.FakeOptions{TLS: googleClientHello},
+		})
+	}
+
+	return s
 }
 
 func generateTCPBinDependent(tlsBins []string) []nfqws.Strategy {
