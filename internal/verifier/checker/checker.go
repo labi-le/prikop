@@ -20,12 +20,12 @@ import (
 )
 
 const (
-	HardTimeout = 3 * time.Second
+	HardTimeout = 5 * time.Second
 	UserAgent   = "Mozilla"
 	// DefaultMinSpeed defines a sane default for throttling detection (e.g., 10KB/s)
 	DefaultMinSpeed = 10 * 1024.0
 
-	HttpBufferSize       = 4096
+	HttpBufferSize       = 64 * 1024
 	MinDataForSpeedCheck = 1024
 	StunDefaultPort      = ":3478"
 	StunRetries          = 3
@@ -129,6 +129,7 @@ func initClients() *httpClients {
 		TLSClientConfig:       &tls.Config{},
 		TLSHandshakeTimeout:   HardTimeout,
 		ResponseHeaderTimeout: HardTimeout,
+		DisableCompression:    true,
 		MaxIdleConnsPerHost:   64,
 		IdleConnTimeout:       30 * time.Second,
 		DialContext: (&net.Dialer{

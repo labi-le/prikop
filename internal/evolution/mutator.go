@@ -58,8 +58,16 @@ const (
 
 var (
 	magicSeqOvls = []int{336, 620, 109, 652, 1, 133, 500, 32, 2}
-	commonSNIs   = []string{"ggpht.com", "google.com", "www.google.com", "max.ru", "youtube.com"}
-	commonHosts  = []string{"mapgl.2gis.com", "www.google.com", "api.google.com", "cloudflare.com"}
+	CommonSNIs   = []string{
+		"www.gosuslugi.ru", "www.sberbank.ru", "www.nalog.ru",
+		"ya.ru", "vk.com", "mail.ru", "ok.ru",
+		"mos.ru", "cbr.ru", "rt.com", "mapgl.2gis.com", "www.google.com",
+	}
+	CommonHosts = []string{
+		"www.gosuslugi.ru", "www.sberbank.ru", "www.nalog.ru",
+		"ya.ru", "vk.com", "mail.ru",
+		"mos.ru", "cbr.ru", "mapgl.2gis.com", "ok.ru",
+	}
 	tamperSpells = []string{"HOst", "hoSt", "hOst", "host"}
 	wssSizes     = []string{"1:6", "1:8", "1:10", "500", "800", "1400", "2048:2"}
 )
@@ -299,7 +307,7 @@ func (m *Mutator) sanitize(s *nfqws.Strategy) {
 	}
 	if isHostFake {
 		if s.Split.HostMod == "" {
-			s.Split.HostMod = "host=www.google.com"
+			s.Split.HostMod = "host=" + CommonHosts[rand.Intn(len(CommonHosts))]
 		}
 	}
 
@@ -378,7 +386,7 @@ func (m *Mutator) mutateTamper(s *nfqws.Strategy) {
 
 func (m *Mutator) mutateSplit(s *nfqws.Strategy) {
 	if strings.Contains(s.Mode, "hostfakesplit") {
-		mod := commonHosts[rand.Intn(len(commonHosts))]
+		mod := CommonHosts[rand.Intn(len(CommonHosts))]
 		s.Split.HostMod = "host=" + mod
 		s.Split.SeqOvl = 0
 		return
@@ -554,7 +562,7 @@ func (m *Mutator) mutateFake(s *nfqws.Strategy) {
 				mods := []string{"rnd", "rndsni", "rnd,dupsid", "padencap", ""}
 				s.Fake.TlsMod = mods[rand.Intn(len(mods))]
 				if rand.Float64() < ProbFakeTCPSNI {
-					sni := commonSNIs[rand.Intn(len(commonSNIs))]
+					sni := CommonSNIs[rand.Intn(len(CommonSNIs))]
 					s.Fake.TlsMod = "sni=" + sni
 				}
 			}

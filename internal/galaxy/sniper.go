@@ -2,10 +2,19 @@ package galaxy
 
 import (
 	"math/rand"
+	"prikop/internal/evolution"
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
 	"strings"
 )
+
+func randSNI() string {
+	return evolution.CommonSNIs[rand.Intn(len(evolution.CommonSNIs))]
+}
+
+func randHost() string {
+	return evolution.CommonHosts[rand.Intn(len(evolution.CommonHosts))]
+}
 
 // GenerateZeroGeneration creates targeted strategies based on discovered bins and PROTOCOL
 func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, proto string) []nfqws.Strategy {
@@ -38,13 +47,13 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 		if tlsBin != "" {
 			population = append(population, nfqws.Strategy{
 				Mode: "fake,multisplit", Repeats: 2,
-				Fake:  nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=ggpht.com"},
+				Fake:  nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=" + randSNI()},
 				Split: nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: tlsBin},
 			})
 			population = append(population, nfqws.Strategy{
 				Mode:  "fake,fakeddisorder",
 				Split: nfqws.SplitOptions{Pos: "10,midsld", SeqOvl: 336, Pattern: tlsBin, FakedPattern: tlsBin},
-				Fake:  nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=fonts.google.com"},
+				Fake:  nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=" + randSNI()},
 			})
 		}
 		population = append(population, nfqws.Strategy{
@@ -60,8 +69,8 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 		})
 		population = append(population, nfqws.Strategy{
 			Mode:    "fake,hostfakesplit",
-			Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=www.google.com"},
-			Split:   nfqws.SplitOptions{HostMod: "host=www.google.com"},
+			Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=" + randSNI()},
+			Split:   nfqws.SplitOptions{HostMod: "host=" + randHost()},
 			Fooling: nfqws.FoolingSet{Ts: true},
 			Tamper:  nfqws.TamperOptions{IpId: "zero"},
 		})
@@ -102,7 +111,7 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 			})
 			population = append(population, nfqws.Strategy{
 				Mode: "hostfakesplit", Repeats: 2,
-				Split: nfqws.SplitOptions{HostMod: "host=mapgl.2gis.com"},
+				Split: nfqws.SplitOptions{HostMod: "host=" + randHost()},
 			})
 		} else {
 			if strings.Contains(binPath, "quic") {
@@ -194,7 +203,7 @@ func GenerateReinforcements(bins []string, proto string, variant int) []nfqws.St
 		case 1:
 			reinforcement = append(reinforcement, nfqws.Strategy{
 				Mode: "fake,fakedsplit", Repeats: 6, Fooling: nfqws.FoolingSet{Ts: true},
-				Split:  nfqws.SplitOptions{FakedPattern: "0x00"},
+				Split:  nfqws.SplitOptions{FakedPattern: "0x12"},
 				Fake:   nfqws.FakeOptions{TLS: tlsBin},
 				Tamper: nfqws.TamperOptions{IpId: "zero"},
 			})

@@ -21,7 +21,6 @@ func init() {
 			{URL: "https://hel1-speed.hetzner.com/100MB.bin", Threshold: DefaultThreshold, IgnoreStatus: false, Proto: types.ProtoTCP}, // Helsinki, FI
 			{URL: "https://ash-speed.hetzner.com/100MB.bin", Threshold: DefaultThreshold, IgnoreStatus: false, Proto: types.ProtoTCP},  // Ashburn, US
 			{URL: "https://hil-speed.hetzner.com/100MB.bin", Threshold: DefaultThreshold, IgnoreStatus: false, Proto: types.ProtoTCP},  // Hillsboro, US
-			{URL: "https://sin-speed.hetzner.com/100MB.bin", Threshold: DefaultThreshold, IgnoreStatus: false, Proto: types.ProtoTCP},  // Singapore
 		},
 	})
 }

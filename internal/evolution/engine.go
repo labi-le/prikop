@@ -146,7 +146,7 @@ func generateChaos(m *Mutator, count int, proto string) []nfqws.Strategy {
 			} else {
 				// Резервный сложный метод
 				s.Mode = "hostfakesplit"
-				s.Split.HostMod = "host=www.google.com"
+				s.Split.HostMod = "host=" + CommonHosts[rand.Intn(len(CommonHosts))]
 			}
 		} else {
 			// UDP/QUIC
