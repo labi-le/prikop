@@ -61,7 +61,7 @@ var (
 	CommonSNIs   = []string{
 		"www.gosuslugi.ru", "www.sberbank.ru", "www.nalog.ru",
 		"ya.ru", "vk.com", "mail.ru", "ok.ru",
-		"mos.ru", "cbr.ru", "rt.com", "mapgl.2gis.com", "www.google.com",
+		"mos.ru", "cbr.ru", "rt.com", "mapgl.2gis.com", "www.google.com", "ggpht.com",
 	}
 	CommonHosts = []string{
 		"www.gosuslugi.ru", "www.sberbank.ru", "www.nalog.ru",

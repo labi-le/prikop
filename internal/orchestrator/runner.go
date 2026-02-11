@@ -99,19 +99,19 @@ func Run(cfg Config, log zerolog.Logger) {
 func definePhases(providers []types.ProviderDefinition, log zerolog.Logger) []Phase {
 	var phases []Phase
 
-	//phases = append(phases, Phase{
-	//	Name:    "GOOGLE TCP",
-	//	Group:   "google_tcp",
-	//	Gens:    5,
-	//	Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", HostListPath),
-	//})
-	//
-	//phases = append(phases, Phase{
-	//	Name:    "GOOGLE UDP (QUIC)",
-	//	Group:   "google_udp",
-	//	Gens:    5,
-	//	Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
-	//})
+	phases = append(phases, Phase{
+		Name:    "GOOGLE TCP",
+		Group:   "google_tcp",
+		Gens:    5,
+		Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", HostListPath),
+	})
+
+	phases = append(phases, Phase{
+		Name:    "GOOGLE UDP (QUIC)",
+		Group:   "google_udp",
+		Gens:    5,
+		Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", HostListPath),
+	})
 
 	for _, p := range providers {
 		filters := "--filter-tcp=80,443"
@@ -168,7 +168,7 @@ func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []s
 				return
 			}
 
-			if best != nil && best.Result.SuccessCount > 0 && best.Result.SuccessCount*2 > best.Result.TotalCount {
+			if best != nil && best.Result.SuccessCount > 0 && best.Result.SuccessCount*2 >= best.Result.TotalCount {
 				strategyArgs := best.Config.String()
 				phaseLogger.Info().Str("winner", strategyArgs).Msg("Phase finished with a winning strategy")
 				block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)

@@ -5,180 +5,232 @@ import (
 	"prikop/internal/evolution"
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
+	"sort"
 	"strings"
-	"sync/atomic"
 )
-
-var lastSNIIdx, lastHostIdx atomic.Int32
-
-func randSNI() string {
-	pool := evolution.CommonSNIs
-	for {
-		idx := int32(rand.Intn(len(pool)))
-		if idx != lastSNIIdx.Load() {
-			lastSNIIdx.Store(idx)
-			return pool[idx]
-		}
-	}
-}
-
-func randHost() string {
-	pool := evolution.CommonHosts
-	for {
-		idx := int32(rand.Intn(len(pool)))
-		if idx != lastHostIdx.Load() {
-			lastHostIdx.Store(idx)
-			return pool[idx]
-		}
-	}
-}
 
 // GenerateZeroGeneration creates targeted strategies based on discovered bins and PROTOCOL
 func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, proto string) []nfqws.Strategy {
+	tlsBins, quicBins := findRelevantBins(discoveredBins, proto)
 	var population []nfqws.Strategy
 
-	findBin := func(mustContain string) string {
-		for _, b := range discoveredBins {
-			if strings.Contains(b, mustContain) {
-				if proto == "tcp" && (strings.Contains(b, "dtls") || strings.Contains(b, "quic")) {
-					continue
-				}
-				return b
-			}
-		}
-		return ""
-	}
-
-	tlsBin := findBin("clienthello_www_google_com")
-	if tlsBin == "" {
-		tlsBin = findBin("clienthello")
-	}
-
-	quicBin := findBin("quic_initial_www_google_com")
-	if quicBin == "" {
-		quicBin = findBin("quic")
-	}
-
-	// === META STRATEGIES ===
 	if proto == "tcp" {
-		if tlsBin != "" {
-			population = append(population, nfqws.Strategy{
-				Mode: "fake,multisplit", Repeats: 2,
-				Fake:  nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=" + randSNI()},
-				Split: nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: tlsBin},
-			})
-			population = append(population, nfqws.Strategy{
-				Mode:  "fake,fakeddisorder",
-				Split: nfqws.SplitOptions{Pos: "10,midsld", SeqOvl: 336, Pattern: tlsBin, FakedPattern: tlsBin},
-				Fake:  nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=" + randSNI()},
-			})
-		}
-		population = append(population, nfqws.Strategy{
-			Mode: "multisplit", Split: nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
-		})
-		if tlsBin != "" {
-			population = append(population, nfqws.Strategy{
-				Mode: "split2", Split: nfqws.SplitOptions{SeqOvl: 681, Pattern: tlsBin},
-			})
-		}
-		population = append(population, nfqws.Strategy{
-			Mode: "multidisorder", Split: nfqws.SplitOptions{Pos: "1,midsld"}, Repeats: 2,
-		})
-		// hostfakesplit снайперы — все SNI × разные Host, слабые умрут сами
-		for i, sni := range evolution.CommonSNIs {
-			population = append(population, nfqws.Strategy{
-				Mode:    "fake,hostfakesplit",
-				Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=" + sni},
-				Split:   nfqws.SplitOptions{HostMod: "host=" + evolution.CommonHosts[i%len(evolution.CommonHosts)]},
-				Fooling: nfqws.FoolingSet{Ts: true},
-				Tamper:  nfqws.TamperOptions{IpId: "zero"},
-			})
-		}
+		// 1. Генерируем стратегии, зависящие от контента (для ВСЕХ подходящих бинов)
+		population = append(population, generateTCPBinDependent(tlsBins)...)
+		// 2. Генерируем статические стратегии (один раз)
+		population = append(population, generateTCPStatic()...)
 	} else {
-		if quicBin != "" {
-			population = append(population, nfqws.Strategy{
-				Mode: "fake", Repeats: 4, AnyProtocol: true, Cutoff: "d2",
-				Fake:    nfqws.FakeOptions{Quic: quicBin},
-				Fooling: nfqws.FoolingSet{Md5Sig: true},
-			})
-		}
+		population = append(population, generateUDPBinDependent(quicBins)...)
 	}
 
-	// === PROCEDURAL ===
-	rand.Shuffle(len(discoveredBins), func(i, j int) {
-		discoveredBins[i], discoveredBins[j] = discoveredBins[j], discoveredBins[i]
-	})
-
-	hostIdx := 0
-	for _, binPath := range discoveredBins {
-		if len(population) >= 100 {
-			break
-		}
-		if proto == "tcp" {
-			if strings.Contains(binPath, "dtls") || !strings.Contains(binPath, "clienthello") {
-				continue
-			}
-			isKyber := strings.Contains(binPath, "kyber")
-			population = append(population, nfqws.Strategy{
-				Mode: "fake,multisplit", Repeats: 3,
-				Fake: nfqws.FakeOptions{TLS: binPath, TlsMod: func() string {
-					if isKyber {
-						return ""
-					} else {
-						return "rnd,dupsid"
-					}
-				}()},
-				Split: nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: binPath},
-			})
-			population = append(population, nfqws.Strategy{
-				Mode: "fake,hostfakesplit", Repeats: 2,
-				Fake:    nfqws.FakeOptions{TLS: binPath, TlsMod: "rnd,dupsid,sni=" + evolution.CommonSNIs[hostIdx%len(evolution.CommonSNIs)]},
-				Split:   nfqws.SplitOptions{HostMod: "host=" + evolution.CommonHosts[hostIdx%len(evolution.CommonHosts)]},
-				Fooling: nfqws.FoolingSet{Ts: true},
-			})
-			hostIdx++
-		} else {
-			if strings.Contains(binPath, "quic") {
-				population = append(population, nfqws.Strategy{
-					Mode: "fake", Repeats: 5,
-					Fooling: nfqws.FoolingSet{Md5Sig: true},
-					Fake:    nfqws.FakeOptions{Quic: binPath, TlsMod: "rnd"},
-				})
-			}
-		}
-	}
+	// 3. Добиваем популяцию процедурными стратегиями (перебор хостов + бинов)
+	population = append(population, generateProcedural(discoveredBins, proto)...)
 
 	return population
 }
 
-// GeneratePrimitives creates atomic strategies (simple blocks) to probe defenses
+func findRelevantBins(bins []string, proto string) ([]string, []string) {
+	var tlsBins, quicBins []string
+
+	for _, b := range bins {
+		if proto == "tcp" {
+			if strings.Contains(b, "dtls") || strings.Contains(b, "quic") {
+				continue
+			}
+			if strings.Contains(b, "clienthello") {
+				tlsBins = append(tlsBins, b)
+			}
+		} else {
+			if strings.Contains(b, "quic") {
+				quicBins = append(quicBins, b)
+			}
+		}
+	}
+
+	sortPriority := func(slice []string, keyword string) {
+		sort.Slice(slice, func(i, j int) bool {
+			hasKeyI := strings.Contains(slice[i], keyword)
+			hasKeyJ := strings.Contains(slice[j], keyword)
+			if hasKeyI && !hasKeyJ {
+				return true
+			}
+			if !hasKeyI && hasKeyJ {
+				return false
+			}
+			return slice[i] < slice[j]
+		})
+	}
+
+	sortPriority(tlsBins, "google")
+	sortPriority(quicBins, "google")
+
+	return tlsBins, quicBins
+}
+
+func generateTCPBinDependent(tlsBins []string) []nfqws.Strategy {
+	var strategies []nfqws.Strategy
+
+	snis := evolution.CommonSNIs
+
+	for i, bin := range tlsBins {
+		sni := snis[i%len(snis)]
+
+		strategies = append(strategies, nfqws.Strategy{
+			Mode: "fake,multisplit", Repeats: 2,
+			Fake:  nfqws.FakeOptions{TLS: bin, TlsMod: "rnd,dupsid,sni=" + sni},
+			Split: nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: bin},
+		})
+		strategies = append(strategies, nfqws.Strategy{
+			Mode:  "fake,fakeddisorder",
+			Split: nfqws.SplitOptions{Pos: "10,midsld", SeqOvl: 336, Pattern: bin, FakedPattern: bin},
+			Fake:  nfqws.FakeOptions{TLS: bin, TlsMod: "rnd,dupsid,sni=" + sni},
+		})
+	}
+	return strategies
+}
+
+func generateTCPStatic() []nfqws.Strategy {
+	var strategies []nfqws.Strategy
+
+	strategies = append(strategies, nfqws.Strategy{
+		Mode: "multisplit", Split: nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
+	})
+
+	strategies = append(strategies, nfqws.Strategy{
+		Mode: "multidisorder", Split: nfqws.SplitOptions{Pos: "1,midsld"}, Repeats: 2,
+	})
+
+	// Static hostfakesplit: independent of bin content
+	// Iterates ALL common SNIs/Hosts
+	for i, sni := range evolution.CommonSNIs {
+		host := evolution.CommonHosts[i%len(evolution.CommonHosts)]
+		strategies = append(strategies, nfqws.Strategy{
+			Mode:    "fake,hostfakesplit",
+			Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=" + sni},
+			Split:   nfqws.SplitOptions{HostMod: "host=" + host},
+			Fooling: nfqws.FoolingSet{Ts: true},
+			Tamper:  nfqws.TamperOptions{IpId: "zero"},
+		})
+	}
+	return strategies
+}
+
+func generateUDPBinDependent(quicBins []string) []nfqws.Strategy {
+	var strategies []nfqws.Strategy
+	for _, bin := range quicBins {
+		strategies = append(strategies, nfqws.Strategy{
+			Mode: "fake", Repeats: 4, AnyProtocol: true, Cutoff: "d2",
+			Fake:    nfqws.FakeOptions{Quic: bin},
+			Fooling: nfqws.FoolingSet{Md5Sig: true},
+		})
+	}
+	return strategies
+}
+
+func generateProcedural(discoveredBins []string, proto string) []nfqws.Strategy {
+	var strategies []nfqws.Strategy
+
+	// Soft limit to prevent OOM if bins count is huge
+	limit := 150
+
+	bins := make([]string, len(discoveredBins))
+	copy(bins, discoveredBins)
+	rand.Shuffle(len(bins), func(i, j int) {
+		bins[i], bins[j] = bins[j], bins[i]
+	})
+
+	for _, binPath := range bins {
+		if len(strategies) >= limit {
+			break
+		}
+		if proto == "tcp" {
+			strategies = append(strategies, generateTCPProcedural(binPath)...)
+		} else {
+			strategies = append(strategies, generateUDPProcedural(binPath)...)
+		}
+	}
+	return strategies
+}
+
+// generateTCPProcedural now returns a strategy for EVERY common host
+func generateTCPProcedural(binPath string) []nfqws.Strategy {
+	if strings.Contains(binPath, "dtls") || !strings.Contains(binPath, "clienthello") {
+		return nil
+	}
+	var strategies []nfqws.Strategy
+	isKyber := strings.Contains(binPath, "kyber")
+
+	tlsMod := "rnd,dupsid"
+	if isKyber {
+		tlsMod = ""
+	}
+
+	// 1. Generic Payload Strategy (One per bin)
+	strategies = append(strategies, nfqws.Strategy{
+		Mode: "fake,multisplit", Repeats: 3,
+		Fake:  nfqws.FakeOptions{TLS: binPath, TlsMod: tlsMod},
+		Split: nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: binPath},
+	})
+
+	// 2. Host-Specific Strategies (One per Host in CommonHosts)
+	// This attempts to find the magic combination of "Valid Payload (Bin)" + "Valid Host Header"
+	for i, host := range evolution.CommonHosts {
+		sni := evolution.CommonSNIs[i%len(evolution.CommonSNIs)]
+		strategies = append(strategies, nfqws.Strategy{
+			Mode: "fake,hostfakesplit", Repeats: 2,
+			Fake:    nfqws.FakeOptions{TLS: binPath, TlsMod: "rnd,dupsid,sni=" + sni},
+			Split:   nfqws.SplitOptions{HostMod: "host=" + host},
+			Fooling: nfqws.FoolingSet{Ts: true},
+		})
+	}
+
+	return strategies
+}
+
+func generateUDPProcedural(binPath string) []nfqws.Strategy {
+	if strings.Contains(binPath, "quic") {
+		return []nfqws.Strategy{{
+			Mode: "fake", Repeats: 5,
+			Fooling: nfqws.FoolingSet{Md5Sig: true},
+			Fake:    nfqws.FakeOptions{Quic: binPath, TlsMod: "rnd"},
+		}}
+	}
+	return nil
+}
+
 func GeneratePrimitives(bins []string, proto string) []nfqws.Strategy {
 	var population []nfqws.Strategy
+	population = append(population, generateSimplePrimitives("multisplit")...)
+	population = append(population, generateSimplePrimitives("multidisorder")...)
+	population = append(population, generateFakePrimitives(bins, proto)...)
+	population = append(population, generateProtoSpecific(proto)...)
+	return population
+}
 
-	// 1. Pure Split variants
+func generateSimplePrimitives(mode string) []nfqws.Strategy {
+	var strategies []nfqws.Strategy
 	splitPos := []string{"1", "2", "3", "method", "host", "sld", "sniext"}
 	for _, pos := range splitPos {
-		population = append(population, nfqws.Strategy{
-			Mode: "multisplit", Split: nfqws.SplitOptions{Pos: pos}, Repeats: 1,
+		strategies = append(strategies, nfqws.Strategy{
+			Mode: mode, Split: nfqws.SplitOptions{Pos: pos}, Repeats: 1,
 		})
 	}
+	return strategies
+}
 
-	// 2. Pure Disorder variants
-	for _, pos := range splitPos {
-		population = append(population, nfqws.Strategy{
-			Mode: "multidisorder", Split: nfqws.SplitOptions{Pos: pos}, Repeats: 1,
-		})
-	}
+func generateFakePrimitives(bins []string, proto string) []nfqws.Strategy {
+	var strategies []nfqws.Strategy
+	shuffled := make([]string, len(bins))
+	copy(shuffled, bins)
+	rand.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
 
-	// 3. Pure Fake variants
-	rand.Shuffle(len(bins), func(i, j int) { bins[i], bins[j] = bins[j], bins[i] })
 	limit := 5
-	if len(bins) < limit {
-		limit = len(bins)
+	if len(shuffled) < limit {
+		limit = len(shuffled)
 	}
 
 	for i := 0; i < limit; i++ {
-		b := bins[i]
+		b := shuffled[i]
 		s := nfqws.Strategy{Mode: "fake", Repeats: 2}
 		if proto == "tcp" {
 			s.Fake.TLS = b
@@ -187,25 +239,25 @@ func GeneratePrimitives(bins []string, proto string) []nfqws.Strategy {
 			s.Fake.Quic = b
 			s.Fake.UnknownUdp = b
 		}
-		population = append(population, s)
+		strategies = append(strategies, s)
 	}
+	return strategies
+}
 
-	// 4. TCP Specific
+func generateProtoSpecific(proto string) []nfqws.Strategy {
 	if proto == "tcp" {
-		population = append(population, nfqws.Strategy{Mode: "synack"})
-		population = append(population, nfqws.Strategy{Mode: "syndata"})
-		population = append(population, nfqws.Strategy{
-			Mode: "fake", TTL: nfqws.TTLOptions{Auto: 3},
-		})
-	} else {
-		population = append(population, nfqws.Strategy{Mode: "udplen", UdpLen: nfqws.UdpLenOptions{Increment: 2}})
+		return []nfqws.Strategy{
+			{Mode: "synack"},
+			{Mode: "syndata"},
+			{Mode: "fake", TTL: nfqws.TTLOptions{Auto: 3}},
+		}
 	}
-
-	return population
+	return []nfqws.Strategy{
+		{Mode: "udplen", UdpLen: nfqws.UdpLenOptions{Increment: 2}},
+	}
 }
 
 func GenerateReinforcements(bins []string, proto string, variant int) []nfqws.Strategy {
-	var reinforcement []nfqws.Strategy
 	findBin := func(sub string) string {
 		for _, b := range bins {
 			if strings.Contains(b, sub) {
@@ -217,37 +269,42 @@ func GenerateReinforcements(bins []string, proto string, variant int) []nfqws.St
 	tlsBin := findBin("clienthello_www_google_com")
 
 	if proto == "tcp" && tlsBin != "" {
-		switch variant % 5 {
-		case 0:
-			reinforcement = append(reinforcement, nfqws.Strategy{
-				Mode: "fakeddisorder", Fooling: nfqws.FoolingSet{Md5Sig: true},
-				Dup:   nfqws.DupOptions{Count: 1, Cutoff: "n2", Fooling: "md5sig"},
-				Split: nfqws.SplitOptions{Pos: "method+2"},
-			})
-		case 1:
-			reinforcement = append(reinforcement, nfqws.Strategy{
-				Mode: "fake,fakedsplit", Repeats: 6, Fooling: nfqws.FoolingSet{Ts: true},
-				Split:  nfqws.SplitOptions{FakedPattern: "0x12"},
-				Fake:   nfqws.FakeOptions{TLS: tlsBin},
-				Tamper: nfqws.TamperOptions{IpId: "zero"},
-			})
-		case 2:
-			reinforcement = append(reinforcement, nfqws.Strategy{
-				Mode: "multisplit", Split: nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
-			})
-		case 3:
-			reinforcement = append(reinforcement, nfqws.Strategy{
-				Mode: "multidisorder", Split: nfqws.SplitOptions{Pos: "2,5,105,host+5,sld-1,endsld-5,endsld"},
-			})
-		case 4:
-			reinforcement = append(reinforcement, nfqws.Strategy{
-				Mode:    "fake,hostfakesplit",
-				Fake:    nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=www.google.com"},
-				Split:   nfqws.SplitOptions{HostMod: "host=www.google.com"},
-				Fooling: nfqws.FoolingSet{Ts: true},
-				Tamper:  nfqws.TamperOptions{IpId: "zero"},
-			})
-		}
+		return generateTCPReinforcements(tlsBin, variant%5)
 	}
-	return reinforcement
+	return nil
+}
+
+func generateTCPReinforcements(tlsBin string, caseIdx int) []nfqws.Strategy {
+	switch caseIdx {
+	case 0:
+		return []nfqws.Strategy{{
+			Mode: "fakeddisorder", Fooling: nfqws.FoolingSet{Md5Sig: true},
+			Dup:   nfqws.DupOptions{Count: 1, Cutoff: "n2", Fooling: "md5sig"},
+			Split: nfqws.SplitOptions{Pos: "method+2"},
+		}}
+	case 1:
+		return []nfqws.Strategy{{
+			Mode: "fake,fakedsplit", Repeats: 6, Fooling: nfqws.FoolingSet{Ts: true},
+			Split:  nfqws.SplitOptions{FakedPattern: "0x12"},
+			Fake:   nfqws.FakeOptions{TLS: tlsBin},
+			Tamper: nfqws.TamperOptions{IpId: "zero"},
+		}}
+	case 2:
+		return []nfqws.Strategy{{
+			Mode: "multisplit", Split: nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
+		}}
+	case 3:
+		return []nfqws.Strategy{{
+			Mode: "multidisorder", Split: nfqws.SplitOptions{Pos: "2,5,105,host+5,sld-1,endsld-5,endsld"},
+		}}
+	case 4:
+		return []nfqws.Strategy{{
+			Mode:    "fake,hostfakesplit",
+			Fake:    nfqws.FakeOptions{TLS: tlsBin, TlsMod: "rnd,dupsid,sni=www.google.com"},
+			Split:   nfqws.SplitOptions{HostMod: "host=www.google.com"},
+			Fooling: nfqws.FoolingSet{Ts: true},
+			Tamper:  nfqws.TamperOptions{IpId: "zero"},
+		}}
+	}
+	return nil
 }
