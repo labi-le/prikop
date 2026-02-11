@@ -14,6 +14,24 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 	tlsBins, quicBins := findRelevantBins(discoveredBins, proto)
 	var population []nfqws.Strategy
 
+	if report.BadSumWorks {
+		population = append(population, nfqws.Strategy{
+			Mode: "fake", Repeats: 2,
+			Fooling: nfqws.FoolingSet{BadSum: true},
+		})
+		population = append(population, nfqws.Strategy{
+			Mode: "fake,multidisorder", Repeats: 2,
+			Fooling: nfqws.FoolingSet{BadSum: true},
+			Split:   nfqws.SplitOptions{Pos: "1,sniext"},
+		})
+	}
+
+	if report.IPFragWorks {
+		population = append(population, nfqws.Strategy{
+			Mode: "ipfrag1", Repeats: 2,
+		})
+	}
+
 	if proto == "tcp" {
 		// 1. Генерируем стратегии, зависящие от контента (для ВСЕХ подходящих бинов)
 		population = append(population, generateTCPBinDependent(tlsBins)...)
