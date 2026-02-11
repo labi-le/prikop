@@ -168,7 +168,7 @@ func executePhases(ctx context.Context, opt *Optimizer, phases []Phase, bins []s
 				return
 			}
 
-			if best != nil && best.Result.SuccessCount > 0 {
+			if best != nil && best.Result.SuccessCount > 0 && best.Result.SuccessCount*2 > best.Result.TotalCount {
 				strategyArgs := best.Config.String()
 				phaseLogger.Info().Str("winner", strategyArgs).Msg("Phase finished with a winning strategy")
 				block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)

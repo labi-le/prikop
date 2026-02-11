@@ -111,7 +111,16 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 			parent := bestParents[rand.Intn(len(bestParents))]
 			if s, ok := parent.Config.(nfqws.Strategy); ok {
 				child := s
-				mutator.SmartMutate(&child, parent.Result.FailureType)
+				mutations := 1
+				if parent.Result.TotalCount > 0 {
+					rate := float64(parent.Result.SuccessCount) / float64(parent.Result.TotalCount)
+					if rate < 0.5 {
+						mutations += 10 // + 10 мутаций богу мутаций
+					}
+				}
+				for m := 0; m < mutations; m++ {
+					mutator.SmartMutate(&child, parent.Result.FailureType)
+				}
 				nextGen = append(nextGen, child)
 			}
 		}
