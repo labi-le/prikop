@@ -14,9 +14,9 @@ var (
 )
 
 func registerProvider(p types.ProviderDefinition) {
-	if p.Name != "constaaant" {
-		return
-	}
+	//if p.Name != "digitalocean" {
+	//	return
+	//}
 	definitions = append(definitions, p)
 	GeneralTargets = append(GeneralTargets, p.Targets...)
 }
