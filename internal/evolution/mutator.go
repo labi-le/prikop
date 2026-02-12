@@ -96,7 +96,7 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 	case model.ReasonReset,
 		model.ReasonTLSNotTLS,           // Вернулась заглушка
 		model.ReasonTLSOversized,        // Склейка пакетов DPI
-		model.ReasonTLSRecordOverflow,   // DPI инжектировал данные или повредил запись
+		model.ReasonTLSRecordOverflow,   // DPI инжектировали данные или повредил запись
 		model.ReasonTLSUnrecognizedName: // SNI mismatch (спуфинг от DPI)
 
 		if r < ProbResetSplit {

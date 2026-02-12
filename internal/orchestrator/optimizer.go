@@ -16,7 +16,6 @@ import (
 )
 
 const (
-	StagnationThreshold = 3
 	MinGensForIdealExit = 2
 	MaxComplexityTCP    = 3
 	MaxComplexityUDP    = 6
@@ -53,10 +52,6 @@ func (o *Optimizer) RunPhase(
 
 	phaseLog.Info().Msg("Starting phase")
 
-	stagnationCount := 0
-	lastBestSuccess := 0
-	reinforcementVariant := 0
-
 	for gen := 0; gen < maxGens; gen++ {
 		select {
 		case <-ctx.Done():
@@ -80,22 +75,6 @@ func (o *Optimizer) RunPhase(
 				evolution.CalculateScore(results[j].Result, results[j].Complexity, s2)
 		})
 
-		if gen == 0 {
-			anySuccess := false
-			for _, r := range results {
-				if r.Result.SuccessCount > 0 {
-					anySuccess = true
-					break
-				}
-			}
-
-			if !anySuccess {
-				genLog.Warn().Msg("All snipers missed. Engaging Panic Mode: Primitives Scan.")
-				population = galaxy.GeneratePrimitives(bins, proto)
-				continue
-			}
-		}
-
 		if len(results) > 0 {
 			bestGen := results[0]
 			sBest, _ := bestGen.Config.(nfqws.Strategy)
@@ -105,7 +84,6 @@ func (o *Optimizer) RunPhase(
 				if globalBest == nil {
 					globalBest = &bestGen
 					o.logNewBest(genLog, globalBest)
-					lastBestSuccess = bestGen.Result.SuccessCount
 				} else {
 					sGlobal, _ := globalBest.Config.(nfqws.Strategy)
 					globalScore := evolution.CalculateScore(globalBest.Result, globalBest.Complexity, sGlobal)
@@ -114,13 +92,6 @@ func (o *Optimizer) RunPhase(
 						globalBest = &bestGen
 						o.logNewBest(genLog, globalBest)
 					}
-				}
-
-				if globalBest.Result.SuccessCount > lastBestSuccess {
-					stagnationCount = 0
-					lastBestSuccess = globalBest.Result.SuccessCount
-				} else {
-					stagnationCount++
 				}
 			}
 		}
@@ -140,27 +111,6 @@ func (o *Optimizer) RunPhase(
 		}
 
 		population = evolution.Evolve(results, bins, proto, genLog)
-
-		if stagnationCount >= StagnationThreshold && globalBest != nil && globalBest.Result.SuccessCount < globalBest.Result.TotalCount {
-			genLog.Warn().Int("stagnation_count", stagnationCount).Int("variant", reinforcementVariant).Msg("Stagnation detected. Injecting reinforcements.")
-
-			reinforcements := galaxy.GenerateReinforcements(bins, proto, reinforcementVariant)
-			reinforcementVariant++
-
-			injectIdx := len(population) - len(reinforcements)
-			if injectIdx < 0 {
-				injectIdx = 0
-			}
-
-			for i, r := range reinforcements {
-				if injectIdx+i < len(population) {
-					population[injectIdx+i] = r
-				} else {
-					population = append(population, r)
-				}
-			}
-			stagnationCount = 0
-		}
 
 		if len(population) == 0 {
 			genLog.Warn().Msg("Population extinct. Ending phase.")

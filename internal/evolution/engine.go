@@ -22,15 +22,6 @@ const (
 	RobustSuccessRate = 30.0
 	ComplexityWeight  = 0.5
 
-	ChaosTCPFakeMultiSplitProbability    = 0.20
-	ChaosTCPFakeMultiDisorderProbability = 0.40
-	ChaosTCPMultiSplitProbability        = 0.60
-	ChaosTCPMultiDisorderProbability     = 0.80
-	ChaosUDPUDPLenProbability            = 0.50
-
-	ChaosMinMutations   = 2
-	ChaosExtraMutations = 3
-
 	SurvivorSuccessThreshold = 0
 	ClusterMinSizeForBackup  = 3
 )
@@ -47,21 +38,8 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 	}
 
 	if len(survivors) == 0 {
-		foundTimeouts := false
-		for _, r := range results {
-			if r.Result.FailureType == model.ReasonTimeout {
-				survivors = append(survivors, r)
-				foundTimeouts = true
-			}
-		}
-		if foundTimeouts {
-			log.Warn().Msg("No direct survivors. Salvaged strategies that caused DPI Timeout (Confusion).")
-		}
-	}
-
-	if len(survivors) == 0 {
-		log.Warn().Msg("EXTINCTION: No strategies survived. Spawning Chaos Generation.")
-		return generateChaos(mutator, PopulationSize, proto)
+		log.Warn().Msg("EXTINCTION: No strategies survived.")
+		return nil
 	}
 
 	clusters := make(map[string][]model.ScoredStrategy)
@@ -124,8 +102,6 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 				nextGen = append(nextGen, child)
 			}
 		}
-	} else {
-		return generateChaos(mutator, PopulationSize, proto)
 	}
 
 	if len(nextGen) > PopulationSize {
@@ -133,51 +109,6 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 	}
 
 	return nextGen
-}
-
-// generateChaos создает стратегии с повышенным шансом на сложные методы
-func generateChaos(m *Mutator, count int, proto string) []nfqws.Strategy {
-	var population []nfqws.Strategy
-	for i := 0; i < count; i++ {
-		s := nfqws.Strategy{Repeats: 1 + rand.Intn(3)}
-		r := rand.Float64()
-
-		if proto == "tcp" {
-			// Распределение вероятностей для TCP
-			if r < ChaosTCPFakeMultiSplitProbability {
-				s.Mode = "fake,multisplit"
-			} else if r < ChaosTCPFakeMultiDisorderProbability {
-				s.Mode = "fake,multidisorder"
-			} else if r < ChaosTCPMultiSplitProbability {
-				s.Mode = "multisplit" // Чистый сплит (иногда фейки палятся)
-			} else if r < ChaosTCPMultiDisorderProbability {
-				s.Mode = "multidisorder"
-			} else {
-				// Резервный сложный метод
-				s.Mode = "hostfakesplit"
-				s.Split.HostMod = "host=" + CommonHosts[rand.Intn(len(CommonHosts))]
-			}
-		} else {
-			// UDP/QUIC
-			if r < ChaosUDPUDPLenProbability {
-				s.Mode = "fake"
-			} else {
-				s.Mode = "udplen"
-			}
-		}
-
-		// Принудительные множественные мутации для создания уникального генома
-		mutations := ChaosMinMutations + rand.Intn(ChaosExtraMutations)
-		for j := 0; j < mutations; j++ {
-			m.Mutate(&s)
-		}
-
-		// Обязательная санитарная обработка
-		m.sanitize(&s)
-
-		population = append(population, s)
-	}
-	return population
 }
 
 func CalculateScore(res model.WorkerResult, complexity int, strat nfqws.Strategy) float64 {
