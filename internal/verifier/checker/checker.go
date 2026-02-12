@@ -204,7 +204,12 @@ func checkHTTP(ctx context.Context, t types.Target, client *http.Client) checkRe
 			if err == io.EOF {
 				break
 			}
-			return failResult(AnalyzeError(err), fmt.Sprintf("body read: %s (got %d/%d bytes)", err, readTotal, t.Threshold))
+			reason := AnalyzeError(err)
+			// Если произошел таймаут во время чтения тела, но данные уже начали поступать - это шейпинг (Throttle)
+			if reason == model.ReasonTimeout && readTotal > 0 {
+				reason = model.ReasonThrottle
+			}
+			return failResult(reason, fmt.Sprintf("body read: %s (got %d/%d bytes)", err, readTotal, t.Threshold))
 		}
 	}
 
