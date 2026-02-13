@@ -8,6 +8,7 @@ import (
 	"prikop/internal/container"
 	"prikop/internal/model"
 	"prikop/internal/recon"
+	"prikop/internal/verifier/checker"
 	"prikop/internal/verifier/tcp16_20"
 	"prikop/internal/verifier/types"
 	"strings"
@@ -89,6 +90,25 @@ func Run(cfg Config, log zerolog.Logger) {
 		log.Warn().Err(err).Msg("Failed to initialize providers")
 	}
 	log.Info().Int("count", len(providers)).Msg("Initialized provider definitions")
+
+	// STARTUP VALIDATION: Ensure all targets are within their CIDR ranges
+	log.Info().Msg("Validating all provider targets against CIDRs...")
+	for _, p := range providers {
+		if p.CIDRFile == "" {
+			continue
+		}
+		networks, err := checker.LoadCIDRs(p.CIDRFile)
+		if err != nil {
+			log.Fatal().Err(err).Str("provider", p.Name).Str("cidr_file", p.CIDRFile).Msg("Failed to load CIDRs for startup validation")
+		}
+
+		for _, t := range p.Targets {
+			if err := checker.ValidateIP(t.URL, networks); err != nil {
+				log.Fatal().Err(err).Str("provider", p.Name).Str("url", t.URL).Msg("STARTUP VALIDATION FAILED: Target IP is not in CIDR range. Please fix the target list or CIDR source.")
+			}
+		}
+	}
+	log.Info().Msg("Startup validation passed successfully")
 
 	phases := definePhases(providers, log)
 	optimizer := NewOptimizer(pool, log.With().Str("component", "optimizer").Logger())

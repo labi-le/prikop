@@ -10,9 +10,10 @@ import (
 )
 
 type GeneralVerifier struct {
-	Mode    string
-	Targets []types.Target
-	Log     zerolog.Logger
+	Mode     string
+	Targets  []types.Target
+	CIDRPath string
+	Log      zerolog.Logger
 }
 
 func (v *GeneralVerifier) Name() string {
@@ -23,5 +24,5 @@ func (v *GeneralVerifier) Run(ctx context.Context) types.CheckResult {
 	if len(v.Targets) == 0 {
 		return types.CheckResult{Success: false, Details: "No targets defined"}
 	}
-	return checker.ExecuteChecks(ctx, v.Log, v.Targets)
+	return checker.ExecuteChecks(ctx, v.Log, v.Targets, v.CIDRPath)
 }

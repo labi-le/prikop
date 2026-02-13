@@ -24,3 +24,12 @@ func GetProviderTargets(name string) []types.Target {
 	}
 	return nil
 }
+
+func GetProviderDefinition(name string) *types.ProviderDefinition {
+	for _, p := range definitions {
+		if p.Name == name {
+			return &p
+		}
+	}
+	return nil
+}

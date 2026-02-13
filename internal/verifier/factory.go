@@ -18,8 +18,8 @@ func NewVerifier(targetGroup string, log zerolog.Logger) types.Verifier {
 		return &youtube.Verifier{Mode: targetGroup, Log: log}
 	}
 
-	targets := tcp16_20.GetProviderTargets(targetGroup)
-	if targets == nil {
+	def := tcp16_20.GetProviderDefinition(targetGroup)
+	if def == nil {
 		return &GeneralVerifier{
 			Mode:    targetGroup,
 			Targets: nil,
@@ -28,8 +28,9 @@ func NewVerifier(targetGroup string, log zerolog.Logger) types.Verifier {
 	}
 
 	return &GeneralVerifier{
-		Mode:    targetGroup,
-		Targets: targets,
-		Log:     log,
+		Mode:     targetGroup,
+		Targets:  def.Targets,
+		CIDRPath: def.CIDRFile,
+		Log:      log,
 	}
 }

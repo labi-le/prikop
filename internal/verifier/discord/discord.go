@@ -45,5 +45,5 @@ func (v *Verifier) Run(ctx context.Context) types.CheckResult {
 		}
 	}
 
-	return checker.ExecuteChecks(ctx, v.Log, targets)
+	return checker.ExecuteChecks(ctx, v.Log, targets, "")
 }

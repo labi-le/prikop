@@ -64,6 +64,7 @@ const (
 	ReasonReset    FailureReason = "reset"    // DPI Active Reject
 	ReasonThrottle FailureReason = "throttle" // DPI Shaping/Slowdown
 	ReasonDNS      FailureReason = "dns"      // DNS resolution failure
+	ReasonCIDR     FailureReason = "cidr"     // Target IP not in CIDR range
 	ReasonUnknown  FailureReason = "unknown"
 
 	ReasonTLSALPN             FailureReason = "tls_alpn"              // DPI навязал ALPN (h2/http1.1) без запроса

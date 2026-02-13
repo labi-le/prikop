@@ -9,6 +9,8 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"prikop/internal/model"
 	"prikop/internal/verifier/types"
 	"strings"
@@ -48,8 +50,17 @@ func failResult(reason model.FailureReason, detail string) checkResult {
 	return checkResult{reason: reason, detail: detail}
 }
 
-func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Target) types.CheckResult {
-	log.Info().Int("target_count", len(targets)).Msg("Verifying group")
+func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Target, cidrPath string) types.CheckResult {
+	log.Info().Int("target_count", len(targets)).Str("cidr_file", cidrPath).Msg("Verifying group")
+
+	var cidrList []*net.IPNet
+	if cidrPath != "" {
+		if list, err := LoadCIDRs(cidrPath); err != nil {
+			log.Warn().Err(err).Msg("Failed to load CIDRs for validation")
+		} else {
+			cidrList = list
+		}
+	}
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -61,6 +72,18 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 		wg.Add(1)
 		go func(tgt types.Target) {
 			defer wg.Done()
+
+			// CIDR Validation
+			if len(cidrList) > 0 {
+				if err := ValidateIP(tgt.URL, cidrList); err != nil {
+					mu.Lock()
+					failed = append(failed, tgt.URL)
+					errorCounts[model.ReasonCIDR]++
+					log.Error().Str("url", tgt.URL).Err(err).Msg("Target excluded: IP not in CIDR")
+					mu.Unlock()
+					return
+				}
+			}
 
 			start := time.Now()
 			res := dispatchCheck(ctx, tgt)
@@ -98,6 +121,50 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 		Msg("Check summary")
 
 	return result
+}
+
+func LoadCIDRs(path string) ([]*net.IPNet, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var networks []*net.IPNet
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		_, ipnet, err := net.ParseCIDR(line)
+		if err == nil {
+			networks = append(networks, ipnet)
+		}
+	}
+	return networks, nil
+}
+
+func ValidateIP(rawURL string, networks []*net.IPNet) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+
+	host := u.Hostname()
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return err
+	}
+
+	for _, ip := range ips {
+		for _, netw := range networks {
+			if netw.Contains(ip) {
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("ip %v not in cidr ranges", ips)
 }
 
 func createHttpClient(proto types.Protocol) *http.Client {
