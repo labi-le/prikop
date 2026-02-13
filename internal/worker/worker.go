@@ -74,7 +74,11 @@ func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult
 		return model.WorkerResult{Error: fmt.Sprintf("iptables: %v", err)}
 	}
 
-	cmd, stdout := StartNFQWS(req.StrategyArgs)
+	allArgs := make([]string, 0, len(req.Filters)+len(req.StrategyArgs))
+	allArgs = append(allArgs, req.Filters...)
+	allArgs = append(allArgs, req.StrategyArgs...)
+
+	cmd, stdout := StartNFQWS(allArgs)
 	if cmd == nil {
 		return model.WorkerResult{Error: "nfqws start failed"}
 	}
@@ -85,11 +89,17 @@ func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult
 		close(exitCh)
 	}()
 	defer func() {
+		// Try SIGTERM first, then SIGKILL if it doesn't exit
 		_ = cmd.Process.Signal(syscall.SIGTERM)
-		<-exitCh
+		select {
+		case <-exitCh:
+		case <-time.After(500 * time.Millisecond):
+			_ = cmd.Process.Kill()
+		}
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	// Wait longer for nfqws to bind to NFQUEUE
+	time.Sleep(150 * time.Millisecond)
 	select {
 	case <-exitCh:
 		return model.WorkerResult{Error: fmt.Sprintf("nfqws crashed: %s", stdout.String())}

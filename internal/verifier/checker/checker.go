@@ -48,26 +48,8 @@ func failResult(reason model.FailureReason, detail string) checkResult {
 	return checkResult{reason: reason, detail: detail}
 }
 
-type httpClients struct {
-	tcp  *http.Client
-	quic *http.Client
-}
-
-var (
-	sharedClients *httpClients
-	clientsOnce   sync.Once
-)
-
-func getClients() *httpClients {
-	clientsOnce.Do(func() {
-		sharedClients = initClients()
-	})
-	return sharedClients
-}
-
 func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Target) types.CheckResult {
 	log.Info().Int("target_count", len(targets)).Msg("Verifying group")
-	clients := getClients()
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -81,7 +63,7 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 			defer wg.Done()
 
 			start := time.Now()
-			res := dispatchCheck(ctx, tgt, clients)
+			res := dispatchCheck(ctx, tgt)
 			elapsed := time.Since(start)
 
 			mu.Lock()
@@ -118,42 +100,38 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 	return result
 }
 
-// - не следует редиректам
-// - валидация сертификатов включена
-func initClients() *httpClients {
+func createHttpClient(proto types.Protocol) *http.Client {
 	noRedirect := func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
 
-	tcpTransport := &http.Transport{
-		TLSClientConfig:       &tls.Config{},
-		TLSHandshakeTimeout:   HardTimeout,
-		ResponseHeaderTimeout: HardTimeout,
-		DisableCompression:    true,
-		MaxIdleConnsPerHost:   64,
-		IdleConnTimeout:       30 * time.Second,
-		DialContext: (&net.Dialer{
-			Timeout: HardTimeout,
-		}).DialContext,
+	if proto == types.ProtoQUIC {
+		return &http.Client{
+			Transport: &http3.Transport{
+				TLSClientConfig: &tls.Config{},
+			},
+			CheckRedirect: noRedirect,
+		}
 	}
 
-	quicTransport := &http3.Transport{
-		TLSClientConfig: &tls.Config{},
-	}
-
-	return &httpClients{
-		tcp: &http.Client{
-			Transport:     tcpTransport,
-			CheckRedirect: noRedirect,
+	// TCP Client with disabled Keep-Alive
+	return &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:       &tls.Config{},
+			TLSHandshakeTimeout:   HardTimeout,
+			ResponseHeaderTimeout: HardTimeout,
+			DisableCompression:    true,
+			DisableKeepAlives:     true, // CRITICAL: Force new connection for every test
+			MaxIdleConnsPerHost:   -1,   // Ensure no idling
+			DialContext: (&net.Dialer{
+				Timeout: HardTimeout,
+			}).DialContext,
 		},
-		quic: &http.Client{
-			Transport:     quicTransport,
-			CheckRedirect: noRedirect,
-		},
+		CheckRedirect: noRedirect,
 	}
 }
 
-func dispatchCheck(ctx context.Context, t types.Target, clients *httpClients) checkResult {
+func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 	if t.Timeout == 0 {
 		t.Timeout = HardTimeout
 	}
@@ -161,10 +139,9 @@ func dispatchCheck(ctx context.Context, t types.Target, clients *httpClients) ch
 	switch t.Proto {
 	case types.ProtoSTUN:
 		return checkSTUN(ctx, t)
-	case types.ProtoTCP:
-		return checkHTTP(ctx, t, clients.tcp)
-	case types.ProtoQUIC:
-		return checkHTTP(ctx, t, clients.quic)
+	case types.ProtoTCP, types.ProtoQUIC:
+		client := createHttpClient(t.Proto)
+		return checkHTTP(ctx, t, client)
 	default:
 		return failResult(model.ReasonUnknown, "unsupported protocol")
 	}

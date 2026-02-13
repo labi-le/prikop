@@ -30,7 +30,7 @@ func SetupIptables(group string) error {
 
 // Cleanup removes processes and flushes firewall
 func Cleanup() {
-	_ = exec.Command("pkill", "nfqws").Run()
+	_ = exec.Command("pkill", "-9", "nfqws").Run()
 	_ = exec.Command("iptables", "-F", "OUTPUT").Run()
 	_ = exec.Command("iptables", "-F", "INPUT").Run()
 }

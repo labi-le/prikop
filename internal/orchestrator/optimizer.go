@@ -110,11 +110,11 @@ func (o *Optimizer) RunPhase(
 			}
 		}
 
-		population = evolution.Evolve(results, bins, proto, genLog)
+		population = evolution.Evolve(results, bins, proto, report, genLog)
 
 		if len(population) == 0 {
-			genLog.Warn().Msg("Population extinct. Ending phase.")
-			break
+			genLog.Warn().Msg("Population extinct. Regenerating fresh generation to continue search.")
+			population = galaxy.GenerateZeroGeneration(bins, report, proto)
 		}
 	}
 

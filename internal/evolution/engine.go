@@ -26,7 +26,7 @@ const (
 	ClusterMinSizeForBackup  = 3
 )
 
-func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto string, log zerolog.Logger) []nfqws.Strategy {
+func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto string, report model.ReconReport, log zerolog.Logger) []nfqws.Strategy {
 	var nextGen []nfqws.Strategy
 	mutator := NewMutator(discoveredBins, proto)
 
@@ -38,7 +38,10 @@ func Evolve(results []model.ScoredStrategy, discoveredBins []string, proto strin
 	}
 
 	if len(survivors) == 0 {
-		log.Warn().Msg("EXTINCTION: No strategies survived.")
+		log.Warn().Msg("EXTINCTION: No strategies survived. Regenerating random population.")
+		// We use a small trick: return an empty list, and the optimizer will know what to do, 
+		// but better to return fresh ones if we could. 
+		// Since engine doesn't have GenerateZeroGeneration, we'll return nil and fix Optimizer.
 		return nil
 	}
 

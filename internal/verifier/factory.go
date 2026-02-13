@@ -18,9 +18,18 @@ func NewVerifier(targetGroup string, log zerolog.Logger) types.Verifier {
 		return &youtube.Verifier{Mode: targetGroup, Log: log}
 	}
 
+	targets := tcp16_20.GetProviderTargets(targetGroup)
+	if targets == nil {
+		return &GeneralVerifier{
+			Mode:    targetGroup,
+			Targets: nil,
+			Log:     log,
+		}
+	}
+
 	return &GeneralVerifier{
 		Mode:    targetGroup,
-		Targets: tcp16_20.GeneralTargets,
+		Targets: targets,
 		Log:     log,
 	}
 }

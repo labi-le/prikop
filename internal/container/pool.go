@@ -178,7 +178,13 @@ func (p *WorkerPool) respawnWorker(old *Worker) {
 	}
 
 	log := p.log.With().Str("worker", old.ID).Logger()
-	log.Info().Msg("Respawning worker")
+	log.Info().Msg("Respawning worker in 1s...")
+	
+	select {
+	case <-p.ctx.Done():
+		return
+	case <-time.After(time.Second):
+	}
 
 	w, err := p.spawnWorker(old.Name, old.ID, old.SocketPath)
 	if err != nil {
@@ -225,17 +231,25 @@ func (p *WorkerPool) waitForSocket(log zerolog.Logger, path string, containerID 
 
 func (p *WorkerPool) Stop() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
+	p.log.Info().Msg("Stopping worker pool")
+	
 	close(p.workers)
 	for w := range p.workers {
 		w.conn.Close()
 	}
 
+	// Copy containers slice under lock to prevent race with spawnWorker
+	cids := make([]string, len(p.containers))
+	copy(cids, p.containers)
+	
+	socketPaths := make([]string, len(p.socketPaths))
+	copy(socketPaths, p.socketPaths)
+	p.mu.Unlock()
+
 	ctx := context.Background()
 	var wg sync.WaitGroup
 
-	for _, cid := range p.containers {
+	for _, cid := range cids {
 		wg.Add(1)
 		go func(id string) {
 			defer wg.Done()
@@ -246,7 +260,7 @@ func (p *WorkerPool) Stop() {
 	}
 	wg.Wait()
 
-	for _, path := range p.socketPaths {
+	for _, path := range socketPaths {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			p.log.Warn().Err(err).Str("path", path).Msg("Failed to remove worker socket")
 		}
