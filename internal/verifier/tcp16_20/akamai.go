@@ -12,7 +12,6 @@ func init() {
 		Targets: []types.Target{
 			{URL: "https://www.roxio.com/static/roxio/images/products/creator/nxt9/call-action-footer-bg.jpg", Threshold: DefaultThreshold, IgnoreStatus: true, Proto: types.ProtoTCP},
 			{URL: "https://media-assets.stryker.com/is/image/stryker/gateway_1?$max_width_1410$", Threshold: DefaultThreshold, IgnoreStatus: true, Proto: types.ProtoTCP},
-			{URL: "https://mrbeast.salesforce.com/images/hop-v2__money-bag.webp", Threshold: DefaultThreshold, Proto: types.ProtoTCP, IgnoreStatus: true},
 			{URL: "https://cdn-front.freepik.com/home/anon-rvmp/spaces/spaces_op.webm", Threshold: DefaultThreshold, Proto: types.ProtoTCP, IgnoreStatus: true},
 			{URL: "https://newfold.scene7.com/is/image/NewfoldDigital/Hero__desktop?ts=1766088635719&dpr=off&fmt=avif-alpha", Threshold: DefaultThreshold, Proto: types.ProtoTCP, IgnoreStatus: true},
 		},

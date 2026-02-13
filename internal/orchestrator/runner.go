@@ -93,20 +93,28 @@ func Run(cfg Config, log zerolog.Logger) {
 
 	// STARTUP VALIDATION: Ensure all targets are within their CIDR ranges
 	log.Info().Msg("Validating all provider targets against CIDRs...")
+	var hasValidationErrors bool
 	for _, p := range providers {
 		if p.CIDRFile == "" {
 			continue
 		}
 		networks, err := checker.LoadCIDRs(p.CIDRFile)
 		if err != nil {
-			log.Fatal().Err(err).Str("provider", p.Name).Str("cidr_file", p.CIDRFile).Msg("Failed to load CIDRs for startup validation")
+			log.Error().Err(err).Str("provider", p.Name).Str("cidr_file", p.CIDRFile).Msg("Failed to load CIDRs for startup validation")
+			hasValidationErrors = true
+			continue
 		}
 
 		for _, t := range p.Targets {
 			if err := checker.ValidateIP(t.URL, networks); err != nil {
-				log.Fatal().Err(err).Str("provider", p.Name).Str("url", t.URL).Msg("STARTUP VALIDATION FAILED: Target IP is not in CIDR range. Please fix the target list or CIDR source.")
+				log.Error().Err(err).Str("provider", p.Name).Str("url", t.URL).Msg("STARTUP VALIDATION FAILED: Target IP is not in CIDR range")
+				hasValidationErrors = true
 			}
 		}
+	}
+
+	if hasValidationErrors {
+		log.Fatal().Msg("Startup validation failed. Please fix the target lists or CIDR sources listed above.")
 	}
 	log.Info().Msg("Startup validation passed successfully")
 

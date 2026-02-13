@@ -9,20 +9,14 @@ const DefaultThreshold = 64 * 1024
 const gens = 5
 
 var (
-	definitions    []types.ProviderDefinition
+	definitions []types.ProviderDefinition
 )
 
 func registerProvider(p types.ProviderDefinition) {
+	//if p.Name != "cloudflare" {
+	//	return
+	//}
 	definitions = append(definitions, p)
-}
-
-func GetProviderTargets(name string) []types.Target {
-	for _, p := range definitions {
-		if p.Name == name {
-			return p.Targets
-		}
-	}
-	return nil
 }
 
 func GetProviderDefinition(name string) *types.ProviderDefinition {

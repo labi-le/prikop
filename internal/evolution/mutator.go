@@ -59,14 +59,15 @@ const (
 var (
 	magicSeqOvls = []int{336, 620, 109, 652, 1, 133, 500, 32, 2}
 	CommonSNIs   = []string{
-		"www.gosuslugi.ru", "www.sberbank.ru", "www.nalog.ru",
-		"ya.ru", "vk.com", "mail.ru", "ok.ru",
-		"mos.ru", "cbr.ru", "rt.com", "mapgl.2gis.com", "www.google.com", "ggpht.com",
+		"www.gosuslugi.ru", "sberbank.ru", "sun6-21.userapi.com",
+		"ya.ru", "eh.vk.com", "support.mcs.mail.ru", "api.ok.ru",
+		"00.img.avito.st", "goya.rutube.ru", "mapgl.2gis.com", "www.google.com", "ggpht.com",
+		"xn--80ajghhoc2aj1c8b.xn--p1ai", "i0.photo.2gis.com",
 	}
 	CommonHosts = []string{
-		"www.gosuslugi.ru", "www.sberbank.ru", "www.nalog.ru",
-		"ya.ru", "vk.com", "mail.ru",
-		"mos.ru", "cbr.ru", "mapgl.2gis.com", "ok.ru",
+		"www.gosuslugi.ru", "sberbank.ru", "sun6-21.userapi.com",
+		"ya.ru", "eh.vk.com", "support.mcs.mail.ru",
+		"00.img.avito.st", "goya.rutube.ru", "mapgl.2gis.com", "api.ok.ru",
 	}
 	tamperSpells = []string{"HOst", "hoSt", "hOst", "host"}
 	wssSizes     = []string{"1:6", "1:8", "1:10", "500", "800", "1400", "2048:2"}

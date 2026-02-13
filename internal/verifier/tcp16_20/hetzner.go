@@ -15,7 +15,6 @@ func init() {
 			{URL: "https://251b5cd9.nip.io/1MB.bin", Threshold: DefaultThreshold, Proto: types.ProtoTCP},
 			{URL: "https://nioges.com/libs/fontawesome/webfonts/fa-solid-900.woff2", Threshold: DefaultThreshold, IgnoreStatus: true, Proto: types.ProtoTCP},
 			{URL: "https://5fd8bdae.nip.io/1MB.bin", Threshold: DefaultThreshold, Proto: types.ProtoTCP},
-
 			{URL: "https://ash-speed.hetzner.com/100MB.bin", Threshold: DefaultThreshold, IgnoreStatus: false, Proto: types.ProtoTCP}, // Ashburn, US
 		},
 	})

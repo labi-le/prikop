@@ -13,7 +13,7 @@ func init() {
 			{URL: "https://cdn.eso.org/images/banner1920/eso2520a.jpg", Threshold: DefaultThreshold, IgnoreStatus: true, Proto: types.ProtoTCP},
 			{URL: "https://arweave.net", Threshold: DefaultThreshold, Proto: types.ProtoTCP},
 			{URL: "https://static-cdn77.xvideos-cdn.com/v3/img/skins/default/logo/events/xvideos.white.olympic.svg", Threshold: DefaultThreshold, Proto: types.ProtoTCP, IgnoreStatus: true},
-			{URL: "https://static.generated.photos/vue-static/genyou/images/hero/hero-1.webp", Threshold: DefaultThreshold, Proto: types.ProtoTCP, IgnoreStatus: true},
+			{URL: "https://forum.xnxx.com/styles/logo_xnxx_valentines.png", Threshold: DefaultThreshold, Proto: types.ProtoTCP, IgnoreStatus: true},
 		},
 	})
 }
