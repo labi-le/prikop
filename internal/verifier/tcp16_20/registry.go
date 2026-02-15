@@ -3,6 +3,8 @@ package tcp16_20
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"prikop/internal/verifier/types"
@@ -11,14 +13,23 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/valyala/fasthttp"
 )
 
-const TargetsDir = "/app/targets"
+func InitializeProviders(shouldFetchCIDRs bool, only string, log zerolog.Logger) ([]types.ProviderDefinition, error) {
+	var source []types.ProviderDefinition
+	if only != "" {
+		for _, d := range definitions {
+			if d.Name == only {
+				source = append(source, d)
+				break
+			}
+		}
+	} else {
+		source = definitions
+	}
 
-func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]types.ProviderDefinition, error) {
-	result := make([]types.ProviderDefinition, len(definitions))
-	copy(result, definitions)
+	result := make([]types.ProviderDefinition, len(source))
+	copy(result, source)
 
 	if err := os.MkdirAll(TargetsDir, 0777); err != nil {
 		log.Warn().Err(err).Msg("Failed to create targets directory")
@@ -33,54 +44,50 @@ func InitializeProviders(shouldFetchCIDRs bool, log zerolog.Logger) ([]types.Pro
 	}
 
 	if shouldFetchCIDRs {
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, 5)
-		client := &fasthttp.Client{
-			ReadTimeout:    30 * time.Second,
-			WriteTimeout:   30 * time.Second,
-			ReadBufferSize: 16384,
-		}
-
-		for i := range result {
-			if result[i].CIDRSource == "" {
-				continue
-			}
-
-			wg.Add(1)
-			go func(idx int) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				def := &result[idx]
-				src := def.CIDRSource
-				provLog := log.With().Str("provider", def.Name).Str("source", src).Logger()
-				provLog.Info().Msg("Fetching CIDRs")
-
-				cidrs, err := downloadCIDRs(client, src)
-				if err != nil {
-					provLog.Error().Err(err).Msg("Error fetching CIDRs")
-					return
-				}
-
-				if len(cidrs) > 0 {
-					fileName := fmt.Sprintf("%s-cidr.txt", def.Name)
-					filePath := filepath.Join(TargetsDir, fileName)
-
-					if err := saveCIDRsToFile(filePath, cidrs); err != nil {
-						provLog.Error().Err(err).Msg("Error saving CIDRs to file")
-					} else {
-						def.CIDRFile = filePath
-						provLog.Info().Int("count", len(cidrs)).Str("path", filePath).Msg("Saved CIDRs")
-					}
-				}
-			}(i)
-		}
-
-		wg.Wait()
+		fetchCIDRs(result, log)
 	}
 
 	return result, nil
+}
+
+func fetchCIDRs(providers []types.ProviderDefinition, log zerolog.Logger) {
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
+
+	for i := range providers {
+		if providers[i].CIDRSource == "" {
+			continue
+		}
+
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			def := &providers[idx]
+			provLog := log.With().Str("provider", def.Name).Str("source", def.CIDRSource).Logger()
+			provLog.Info().Msg("Fetching CIDRs")
+
+			cidrs, err := downloadCIDRs(def.CIDRSource)
+			if err != nil {
+				provLog.Error().Err(err).Msg("Error fetching CIDRs")
+				return
+			}
+
+			if len(cidrs) > 0 {
+				filePath := filepath.Join(TargetsDir, def.Name+"-cidr.txt")
+				if err := saveCIDRsToFile(filePath, cidrs); err != nil {
+					provLog.Error().Err(err).Msg("Error saving CIDRs to file")
+				} else {
+					def.CIDRFile = filePath
+					provLog.Info().Int("count", len(cidrs)).Str("path", filePath).Msg("Saved CIDRs")
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
 }
 
 func saveCIDRsToFile(path string, cidrs []string) error {
@@ -98,25 +105,28 @@ func saveCIDRsToFile(path string, cidrs []string) error {
 	return nil
 }
 
-func downloadCIDRs(client *fasthttp.Client, rawURL string) ([]string, error) {
-	req := fasthttp.AcquireRequest()
-	defer fasthttp.ReleaseRequest(req)
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
+func downloadCIDRs(rawURL string) ([]string, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
 
-	req.SetRequestURI(rawURL)
-	req.Header.SetMethod("GET")
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
 
-	if err := client.DoRedirects(req, resp, 10); err != nil {
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode() != 200 {
-		return nil, fmt.Errorf("status code %d", resp.StatusCode())
-	}
+	return parseCIDRs(body)
+}
 
-	body := resp.Body()
-
+func parseCIDRs(body []byte) ([]string, error) {
 	type fastlyResp struct {
 		Addresses     []string `json:"addresses"`
 		IPv6Addresses []string `json:"ipv6_addresses"`

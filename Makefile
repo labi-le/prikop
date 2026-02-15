@@ -4,6 +4,7 @@ CURRENT_DIR := $(shell pwd)
 
 HOST_SOCKET_DIR ?= /tmp/prikop_sockets
 HOST_TARGETS_DIR ?= $(CURRENT_DIR)/targets
+PROVIDER ?=
 
 run: build
 	mkdir -p $(HOST_SOCKET_DIR)
@@ -18,7 +19,7 @@ run: build
 	   -v $(CURRENT_DIR)/fake:/app/fake \
 	   -e HOST_SOCKET_DIR=$(HOST_SOCKET_DIR) \
 	   -e HOST_TARGETS_DIR=$(HOST_TARGETS_DIR) \
-	   prikop:latest
+	   prikop:latest $(if $(PROVIDER),-provider $(PROVIDER))
 
 build:
 	docker build -t prikop:latest .

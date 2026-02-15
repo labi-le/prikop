@@ -1,4 +1,4 @@
-package recon
+package scout
 
 import (
 	"context"
@@ -10,8 +10,11 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// RunScout performs active reconnaissance (middlebox fingerprinting)
-func RunScout(ctx context.Context, pool *container.WorkerPool, group string, log zerolog.Logger) model.ReconReport {
+// Group is the target group used for network probing.
+var Group = "google_tcp"
+
+// RunScout performs active reconnaissance (middlebox fingerprinting).
+func RunScout(ctx context.Context, pool *container.WorkerPool, log zerolog.Logger) model.ReconReport {
 	log.Info().Msg("Starting active reconnaissance...")
 	r := model.ReconReport{}
 
@@ -20,7 +23,7 @@ func RunScout(ctx context.Context, pool *container.WorkerPool, group string, log
 
 	fragReq := model.WorkerRequest{
 		StrategyArgs: strings.Fields("--dpi-desync=ipfrag1 --dpi-desync-repeats=2"),
-		TargetGroup:  group,
+		TargetGroup:  Group,
 	}
 
 	fragRes, err := pool.Exec(ctx, fragReq)
@@ -41,7 +44,7 @@ func RunScout(ctx context.Context, pool *container.WorkerPool, group string, log
 
 	badsumReq := model.WorkerRequest{
 		StrategyArgs: strings.Fields("--dpi-desync=fake --dpi-desync-fooling=badsum"),
-		TargetGroup:  group,
+		TargetGroup:  Group,
 	}
 
 	badsumRes, err := pool.Exec(ctx, badsumReq)

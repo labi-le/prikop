@@ -57,4 +57,5 @@ type ProviderDefinition struct {
 	CIDRFile   string
 	Targets    []Target
 	Gens       int
+	Filters    string
 }
