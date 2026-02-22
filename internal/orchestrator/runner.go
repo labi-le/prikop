@@ -12,6 +12,7 @@ import (
 	"prikop/internal/verifier/checker"
 	"prikop/internal/verifier/tcp16_20"
 	"prikop/internal/verifier/types"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -128,7 +129,7 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 
 		gens := p.Gens
 		if gens == 0 {
-			gens = 5
+			gens = 3
 		}
 
 		wg.Add(1)
@@ -167,7 +168,39 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 	}
 
 	wg.Wait()
+
+	finalConfigs = optimizeStrategies(finalConfigs)
 	printFinalConfig(finalConfigs)
+}
+
+// optimizeStrategies merges duplicate strategies across providers to create a shorter config
+func optimizeStrategies(configsWithProvider []config) []config {
+	if len(configsWithProvider) == 0 {
+		return configsWithProvider
+	}
+
+	// Group by unique config string
+	uniqueConfigs := make(map[string][]string) // config -> list of providers
+	for _, c := range configsWithProvider {
+		uniqueConfigs[c.Config] = append(uniqueConfigs[c.Config], c.Provider)
+	}
+
+	// Build optimized result
+	var optimized []config
+	for cfg, providers := range uniqueConfigs {
+		providerList := strings.Join(providers, ", ")
+		optimized = append(optimized, config{
+			Config:   cfg,
+			Provider: providerList,
+		})
+	}
+
+	// Sort for consistent output
+	sort.Slice(optimized, func(i, j int) bool {
+		return optimized[i].Provider < optimized[j].Provider
+	})
+
+	return optimized
 }
 
 func printFinalConfig(configsWithProvider []config) {

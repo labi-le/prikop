@@ -43,6 +43,7 @@ type Verifier interface {
 }
 
 type Target struct {
+	ID           string
 	URL          string
 	Threshold    int
 	Proto        Protocol

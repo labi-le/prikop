@@ -50,3 +50,6 @@ context.md
 upload-tg.sh
 
 *_generated.go
+
+# Generated CIDR files (run `go generate` to recreate)
+targets/*-cidr.txt
