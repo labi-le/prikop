@@ -14,6 +14,7 @@ const (
 	TargetSuccessRate      = 80
 	WorkerMemoryLimit      = 60 * 1024 * 1024 // 60 MB
 	SocketDir              = "/var/run/prikop"
+	TargetsDir             = "/app/targets"
 )
 
 // WorkerRequest отправляется оркестратором воркеру

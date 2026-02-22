@@ -78,10 +78,7 @@ func Run(cfg Config, log zerolog.Logger) {
 	}
 	log.Info().Int("count", len(discoveredBins)).Msg("Discovered bin files")
 
-	providers, err := tcp16_20.InitializeProviders(true, cfg.Provider, log.With().Str("component", "verifier").Logger())
-	if err != nil {
-		log.Warn().Err(err).Msg("Failed to initialize providers")
-	}
+	providers := tcp16_20.Cases()
 	log.Info().Int("count", len(providers)).Msg("Initialized provider definitions")
 
 	// STARTUP VALIDATION: Ensure all targets are within their CIDR ranges

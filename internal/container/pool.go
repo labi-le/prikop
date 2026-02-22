@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"prikop/internal/model"
-	"prikop/internal/verifier/tcp16_20"
 	"sync"
 	"time"
 
@@ -133,7 +132,7 @@ func (p *WorkerPool) spawnWorker(name, id, socketPath string) (*Worker, error) {
 				{
 					Type:   mount.TypeBind,
 					Source: p.hostTargetsDir,
-					Target: tcp16_20.TargetsDir,
+					Target: model.TargetsDir,
 				},
 			},
 			AutoRemove: true,
@@ -179,7 +178,7 @@ func (p *WorkerPool) respawnWorker(old *Worker) {
 
 	log := p.log.With().Str("worker", old.ID).Logger()
 	log.Info().Msg("Respawning worker in 1s...")
-	
+
 	select {
 	case <-p.ctx.Done():
 		return
@@ -232,7 +231,7 @@ func (p *WorkerPool) waitForSocket(log zerolog.Logger, path string, containerID 
 func (p *WorkerPool) Stop() {
 	p.mu.Lock()
 	p.log.Info().Msg("Stopping worker pool")
-	
+
 	close(p.workers)
 	for w := range p.workers {
 		w.conn.Close()
@@ -241,7 +240,7 @@ func (p *WorkerPool) Stop() {
 	// Copy containers slice under lock to prevent race with spawnWorker
 	cids := make([]string, len(p.containers))
 	copy(cids, p.containers)
-	
+
 	socketPaths := make([]string, len(p.socketPaths))
 	copy(socketPaths, p.socketPaths)
 	p.mu.Unlock()

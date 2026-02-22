@@ -30,7 +30,7 @@ var tmplFS embed.FS
 
 const (
 	defaultSuiteURL   = "https://raw.githubusercontent.com/hyperion-cs/dpi-checkers/refs/heads/main/ru/tcp-16-20/suite.json"
-	defaultOutputFile = "internal/verifier/tcp16_20_generated/tcp16_20_generated.go"
+	defaultOutputFile = "internal/verifier/tcp16_20/suite.go"
 )
 
 type SuiteEntry struct {
