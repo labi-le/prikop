@@ -1,12 +1,13 @@
 package checker
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,17 +23,16 @@ import (
 )
 
 const (
-	HardTimeout = 5 * time.Second
-	UserAgent   = "Mozilla"
-	// DefaultMinSpeed defines a sane default for throttling detection (e.g., 10KB/s)
-	DefaultMinSpeed = 10 * 1024.0
+	// JS: let TIMEOUT_MS = 15000;
+	DefaultTimeout = 15 * time.Second
+	// JS: const DPI_THR_BYTES = 64 * 1024;
+	PostPayloadSize = 64 * 1024
 
-	HttpBufferSize       = 64 * 1024
-	MinDataForSpeedCheck = 1024
-	StunDefaultPort      = ":3478"
-	StunRetries          = 3
-	StunRetryInterval    = 200 * time.Millisecond
+	UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+	StunDefaultPort         = ":3478"
+	StunRetries             = 3
+	StunRetryInterval       = 200 * time.Millisecond
 	StunTypeBindingRequest  = 0x0001
 	StunMagicCookie         = 0x2112A442
 	StunTypeBindingResponse = 0x0101
@@ -51,7 +51,7 @@ func failResult(reason model.FailureReason, detail string) checkResult {
 }
 
 func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Target, cidrPath string) types.CheckResult {
-	log.Info().Int("target_count", len(targets)).Str("cidr_file", cidrPath).Msg("Verifying group")
+	log.Info().Int("target_count", len(targets)).Str("cidr_file", cidrPath).Msg("Verifying group (TCP 16-20 Logic)")
 
 	var cidrList []*net.IPNet
 	if cidrPath != "" {
@@ -167,116 +167,138 @@ func ValidateIP(rawURL string, networks []*net.IPNet) error {
 	return fmt.Errorf("ip %v not in cidr ranges", ips)
 }
 
-func createHttpClient(proto types.Protocol) *http.Client {
+func createHttpClient(proto types.Protocol, timeout time.Duration) *http.Client {
 	noRedirect := func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
+		// JS logic: redirect: "follow". Go http client follows by default up to 10 redirects.
+		// However, standard http.Client doesn't support "follow" for POST bodies automatically in all cases seamlessly.
+		// But for HEAD/GET it does. Let's stick to default behavior (nil) which follows redirects.
+		return nil
 	}
 
 	if proto == types.ProtoQUIC {
 		return &http.Client{
 			Transport: &http3.Transport{
-				TLSClientConfig: &tls.Config{},
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
-			CheckRedirect: noRedirect,
+			Timeout: timeout,
 		}
 	}
 
-	// TCP Client with disabled Keep-Alive
+	// TCP Client matching JS fetch behavior (keepalive: false)
 	return &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig:       &tls.Config{},
-			TLSHandshakeTimeout:   HardTimeout,
-			ResponseHeaderTimeout: HardTimeout,
+			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+			TLSHandshakeTimeout:   timeout,
+			ResponseHeaderTimeout: timeout,
 			DisableCompression:    true,
-			DisableKeepAlives:     true, // CRITICAL: Force new connection for every test
-			MaxIdleConnsPerHost:   -1,   // Ensure no idling
+			DisableKeepAlives:     true, // Explicitly false as per JS
+			MaxIdleConnsPerHost:   -1,
 			DialContext: (&net.Dialer{
-				Timeout: HardTimeout,
+				Timeout: timeout,
 			}).DialContext,
 		},
 		CheckRedirect: noRedirect,
+		Timeout:       timeout,
 	}
 }
 
 func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 	if t.Timeout == 0 {
-		t.Timeout = HardTimeout
+		t.Timeout = DefaultTimeout
 	}
 
 	switch t.Proto {
 	case types.ProtoSTUN:
 		return checkSTUN(ctx, t)
 	case types.ProtoTCP, types.ProtoQUIC:
-		client := createHttpClient(t.Proto)
-		return checkHTTP(ctx, t, client)
+		client := createHttpClient(t.Proto, t.Timeout)
+		return checkHTTPSequence(ctx, t, client)
 	default:
 		return failResult(model.ReasonUnknown, "unsupported protocol")
 	}
 }
 
-func checkHTTP(ctx context.Context, t types.Target, client *http.Client) checkResult {
-	reqCtx, cancel := context.WithTimeout(ctx, t.Timeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, "GET", t.URL, nil)
+// checkHTTPSequence implements the 2-step logic from main.js:
+// 1. Alive Check (HEAD)
+// 2. DPI Check (POST 64KB)
+func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client) checkResult {
+	// --- Step 1: Liveness Check (HEAD) ---
+	aliveURL := getUniqueURL(t.URL)
+	reqHead, err := http.NewRequestWithContext(ctx, "HEAD", aliveURL, nil)
 	if err != nil {
 		return failResult(model.ReasonUnknown, err.Error())
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	setCommonHeaders(reqHead)
 
-	start := time.Now()
-	resp, err := client.Do(req)
+	respHead, err := client.Do(reqHead)
 	if err != nil {
-		return failResult(AnalyzeError(err), err.Error())
+		// If Liveness fails, we assume target is unreachable or blocked immediately
+		return failResult(AnalyzeError(err), fmt.Sprintf("HEAD failed: %v", err))
 	}
-	defer resp.Body.Close()
+	respHead.Body.Close()
 
-	if !t.IgnoreStatus && (resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusBadRequest) {
-		return failResult(model.ReasonReset, fmt.Sprintf("HTTP %d", resp.StatusCode))
-	}
+	// If HEAD succeeded, we assume the target is "alive".
+	// Now we check for DPI blocking on large uploads (POST).
 
-	// Data Transfer Phase
-	buf := make([]byte, HttpBufferSize)
-	readTotal := 0
+	// --- Step 2: DPI Check (POST 64KB) ---
+	dpiURL := getUniqueURL(t.URL)
 
-	for readTotal < t.Threshold {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			readTotal += n
-		}
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			reason := AnalyzeError(err)
-			// Если произошел таймаут во время чтения тела, но данные уже начали поступать - это шейпинг (Throttle)
-			if reason == model.ReasonTimeout && readTotal > 0 {
-				reason = model.ReasonThrottle
-			}
-			return failResult(reason, fmt.Sprintf("body read: %s (got %d/%d bytes)", err, readTotal, t.Threshold))
-		}
+	// Generate random payload
+	payload := make([]byte, PostPayloadSize)
+	if _, err := rand.Read(payload); err != nil {
+		return failResult(model.ReasonUnknown, "failed to gen payload")
 	}
 
-	if readTotal < t.Threshold {
-		return failResult(model.ReasonReset, fmt.Sprintf("short body: %d/%d bytes", readTotal, t.Threshold))
+	reqPost, err := http.NewRequestWithContext(ctx, "POST", dpiURL, bytes.NewReader(payload))
+	if err != nil {
+		return failResult(model.ReasonUnknown, err.Error())
 	}
+	setCommonHeaders(reqPost)
+	reqPost.ContentLength = int64(PostPayloadSize)
+	reqPost.Header.Set("Content-Type", "application/octet-stream")
 
-	// Speed Check
-	totalTime := time.Since(start).Seconds()
-	if totalTime > 0 {
-		speed := float64(readTotal) / totalTime
+	startPost := time.Now()
+	respPost, err := client.Do(reqPost)
+	if err != nil {
+		// If POST fails (timeout or reset) but HEAD worked -> DPI detected
+		reason := AnalyzeError(err)
 
-		minSpeed := t.MinSpeed
-		if minSpeed == 0 {
-			minSpeed = DefaultMinSpeed
+		// In the JS script:
+		// if (e.name === "AbortError" && alive) -> Detected (Bad)
+		// if (other error && alive) -> Possible Detected (Skip/Bad)
+
+		// Map timeouts explicitly to blocked logic
+		if reason == model.ReasonTimeout {
+			return failResult(model.ReasonThrottle, fmt.Sprintf("POST timed out after %v (DPI Block)", time.Since(startPost)))
 		}
 
-		if speed < minSpeed && readTotal > MinDataForSpeedCheck {
-			return failResult(model.ReasonThrottle, fmt.Sprintf("%.1f KB/s (min %.1f KB/s)", speed/1024, minSpeed/1024))
-		}
+		return failResult(reason, fmt.Sprintf("POST failed: %v", err))
 	}
+	defer respPost.Body.Close()
 
+	// Consume body to ensure request completes fully
+	io.Copy(io.Discard, respPost.Body)
+
+	// In JS script: if fetch completes (no error) -> "not detected" -> Success
+	// Status code doesn't matter (404/403/500 is fine, connection wasn't dropped)
 	return okResult
+}
+
+func getUniqueURL(base string) string {
+	separator := "?"
+	if strings.Contains(base, "?") {
+		separator = "&"
+	}
+	// JS: `${url}${sep}t=${Math.random()}`
+	// We use timestamp nanoseconds for randomness
+	return fmt.Sprintf("%s%st=%d", base, separator, time.Now().UnixNano())
+}
+
+func setCommonHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", UserAgent)
+	// JS: cache: "no-store"
+	req.Header.Set("Cache-Control", "no-store")
+	req.Header.Set("Pragma", "no-cache")
 }
 
 func checkSTUN(ctx context.Context, t types.Target) checkResult {
