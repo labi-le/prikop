@@ -39,12 +39,17 @@ const (
 	StunTypeBindingSuccess  = 0x0111
 )
 
+// reasonSkip marks an inconclusive result — not a pass, not a hard failure.
+// Corresponds to JS "skip", "probably detected", "possible detected", "unlikely".
+const reasonSkip model.FailureReason = "skip"
+
 type checkResult struct {
 	reason model.FailureReason
 	detail string
 }
 
 var okResult = checkResult{reason: model.ReasonNone}
+var skipResult = checkResult{reason: reasonSkip}
 
 func failResult(reason model.FailureReason, detail string) checkResult {
 	return checkResult{reason: reason, detail: detail}
@@ -94,6 +99,15 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 
 			if res.reason == model.ReasonNone {
 				passed = append(passed, tgt.URL)
+			} else if res.reason == reasonSkip {
+				// Inconclusive — JS "skip/probably/possible/unlikely detected".
+				// Do not count as pass or fail; just log.
+				log.Debug().
+					Str("url", tgt.URL).
+					Str("proto", tgt.Proto.String()).
+					Str("detail", res.detail).
+					Dur("elapsed", elapsed).
+					Msg("Target result inconclusive (skip)")
 			} else {
 				failed = append(failed, tgt.URL)
 				errorCounts[res.reason]++
@@ -168,13 +182,6 @@ func ValidateIP(rawURL string, networks []*net.IPNet) error {
 }
 
 func createHttpClient(proto types.Protocol, timeout time.Duration) *http.Client {
-	noRedirect := func(_ *http.Request, _ []*http.Request) error {
-		// JS logic: redirect: "follow". Go http client follows by default up to 10 redirects.
-		// However, standard http.Client doesn't support "follow" for POST bodies automatically in all cases seamlessly.
-		// But for HEAD/GET it does. Let's stick to default behavior (nil) which follows redirects.
-		return nil
-	}
-
 	if proto == types.ProtoQUIC {
 		return &http.Client{
 			Transport: &http3.Transport{
@@ -184,21 +191,20 @@ func createHttpClient(proto types.Protocol, timeout time.Duration) *http.Client 
 		}
 	}
 
-	// TCP Client matching JS fetch behavior (keepalive: false)
+	// TCP Client — keepalive: false, redirect: follow (matches JS fetch defaults)
 	return &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 			TLSHandshakeTimeout:   timeout,
 			ResponseHeaderTimeout: timeout,
 			DisableCompression:    true,
-			DisableKeepAlives:     true, // Explicitly false as per JS
+			DisableKeepAlives:     true,
 			MaxIdleConnsPerHost:   -1,
 			DialContext: (&net.Dialer{
 				Timeout: timeout,
 			}).DialContext,
 		},
-		CheckRedirect: noRedirect,
-		Timeout:       timeout,
+		Timeout: timeout,
 	}
 }
 
@@ -218,9 +224,18 @@ func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 	}
 }
 
-// checkHTTPSequence implements the 2-step logic from main.js:
-// 1. Alive Check (HEAD)
-// 2. DPI Check (POST 64KB)
+// checkHTTPSequence implements the 2-step DPI detection logic from main.js:
+//
+// Step 1 — HEAD (liveness check):
+//   - HEAD timeout (AbortError in JS)  → skip entirely (target dead/unreachable)
+//   - HEAD instant error (other JS error) → alive=false, still try POST
+//   - HEAD success                      → alive=true, try POST
+//
+// Step 2 — POST 64 KiB (DPI check):
+//   - POST success                      → not detected ✅ (PASS)
+//   - POST timeout + alive              → detected ❗ (FAIL — DPI throttling)
+//   - POST timeout + !alive             → probably detected ⚠️ (SKIP — inconclusive)
+//   - POST instant error (any alive)    → possible/unlikely detected ⚠️ (SKIP — inconclusive)
 func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client) checkResult {
 	// --- Step 1: Liveness Check (HEAD) ---
 	aliveURL := getUniqueURL(t.URL)
@@ -230,20 +245,24 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 	}
 	setCommonHeaders(reqHead)
 
+	var alive bool
 	respHead, err := client.Do(reqHead)
 	if err != nil {
-		// If Liveness fails, we assume target is unreachable or blocked immediately
-		return failResult(AnalyzeError(err), fmt.Sprintf("HEAD failed: %v", err))
+		reason := AnalyzeError(err)
+		if reason == model.ReasonTimeout {
+			// JS: AbortError on HEAD → alive=false, possibleAlive=false → skip
+			return skipResult
+		}
+		// JS: other error on HEAD → alive=false, possibleAlive=true → continue to POST
+		alive = false
+	} else {
+		respHead.Body.Close()
+		alive = true
 	}
-	respHead.Body.Close()
 
-	// If HEAD succeeded, we assume the target is "alive".
-	// Now we check for DPI blocking on large uploads (POST).
-
-	// --- Step 2: DPI Check (POST 64KB) ---
+	// --- Step 2: DPI Check (POST 64 KiB) ---
 	dpiURL := getUniqueURL(t.URL)
 
-	// Generate random payload
 	payload := make([]byte, PostPayloadSize)
 	if _, err := rand.Read(payload); err != nil {
 		return failResult(model.ReasonUnknown, "failed to gen payload")
@@ -260,27 +279,24 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 	startPost := time.Now()
 	respPost, err := client.Do(reqPost)
 	if err != nil {
-		// If POST fails (timeout or reset) but HEAD worked -> DPI detected
 		reason := AnalyzeError(err)
-
-		// In the JS script:
-		// if (e.name === "AbortError" && alive) -> Detected (Bad)
-		// if (other error && alive) -> Possible Detected (Skip/Bad)
-
-		// Map timeouts explicitly to blocked logic
 		if reason == model.ReasonTimeout {
-			return failResult(model.ReasonThrottle, fmt.Sprintf("POST timed out after %v (DPI Block)", time.Since(startPost)))
+			if alive {
+				// JS: HEAD ok + POST timeout → detected ❗ (FAIL)
+				return failResult(model.ReasonThrottle, fmt.Sprintf("POST timed out after %v (DPI detected)", time.Since(startPost)))
+			}
+			// JS: HEAD instant error + POST timeout → probably detected ⚠️ (SKIP)
+			return skipResult
 		}
-
-		return failResult(reason, fmt.Sprintf("POST failed: %v", err))
+		// JS: POST instant error (any alive value) → possible/unlikely detected ⚠️ (SKIP)
+		return skipResult
 	}
 	defer respPost.Body.Close()
 
-	// Consume body to ensure request completes fully
+	// Drain body so the connection is properly closed
 	io.Copy(io.Discard, respPost.Body)
 
-	// In JS script: if fetch completes (no error) -> "not detected" -> Success
-	// Status code doesn't matter (404/403/500 is fine, connection wasn't dropped)
+	// JS: POST completes without error → not detected ✅ (PASS)
 	return okResult
 }
 
@@ -290,7 +306,6 @@ func getUniqueURL(base string) string {
 		separator = "&"
 	}
 	// JS: `${url}${sep}t=${Math.random()}`
-	// We use timestamp nanoseconds for randomness
 	return fmt.Sprintf("%s%st=%d", base, separator, time.Now().UnixNano())
 }
 

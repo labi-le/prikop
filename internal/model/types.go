@@ -7,10 +7,10 @@ import (
 const (
 	QueueNum               = "200"
 	ImageName              = "prikop:latest"
-	ContainerTimeout       = 15 * time.Second
+	ContainerTimeout       = 40 * time.Second
 	MaxWorkers             = 50
 	MaxConcurrentProviders = 1
-	CheckTimeout           = 3000 * time.Millisecond
+	CheckTimeout           = 30 * time.Second
 	TargetSuccessRate      = 80
 	WorkerMemoryLimit      = 60 * 1024 * 1024 // 60 MB
 	SocketDir              = "/var/run/prikop"

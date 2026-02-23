@@ -21,7 +21,7 @@ run: build
 	   -e HOST_TARGETS_DIR=$(HOST_TARGETS_DIR) \
 	   prikop:latest $(if $(PROVIDER),-provider $(PROVIDER))
 
-build:
+build: generate
 	docker build -t prikop:latest .
 
 context:
