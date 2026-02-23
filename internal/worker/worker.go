@@ -110,7 +110,7 @@ func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult
 	vCtx, cancel := context.WithTimeout(context.Background(), model.CheckTimeout)
 	defer cancel()
 
-	checkRes := v.Run(vCtx)
+	checkRes := v.Run(vCtx, req.MaxTargets)
 
 	return model.WorkerResult{
 		Success:      checkRes.Success,

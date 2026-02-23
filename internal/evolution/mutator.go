@@ -108,14 +108,17 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 			m.mutateTamper(s) // Включаем tamper (изменение заголовков)
 		}
 
-	// === ГРУППА 2: ПОТЕРЯ ПАКЕТОВ / ТАЙМАУТЫ ===
-	// Пакеты не доходят или дропаются тихо.
-	// Решение: Изменение параметров доставки (TTL, Repeats, Mode).
+	// === ГРУППА 2: ПОТЕРЯ ПАКЕТОВ / ТАЙМАУТЫ / НЕОПРЕДЕЛЕННОСТЬ ===
+	// Пакеты не доходят, дропаются тихо или результат неоднозначен.
+	// Решение: Изменение параметров доставки или упрощение.
 	case model.ReasonTimeout,
+		model.ReasonSkip,
 		model.ReasonTLSHandshake,
 		model.ReasonTLSInternal:
 
-		if r < ProbTimeoutRepeat {
+		if feedback == model.ReasonSkip && r < 0.3 {
+			m.mutateSimplify(s) // Если "skip", возможно стратегия слишком ломает пакеты
+		} else if r < ProbTimeoutRepeat {
 			m.mutateRepeats(s) // Больше повторов
 		} else if r < ProbTimeoutMode {
 			m.mutateMode(s) // Смена режима доставки (fake -> split)

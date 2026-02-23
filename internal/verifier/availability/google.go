@@ -9,9 +9,11 @@ const googleHostListPath = "/app/targets"
 
 func init() {
 	registerProvider(types.ProviderDefinition{
-		Name:    "google_tcp",
-		Gens:    10,
-		Filters: fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", googleHostListPath),
+		Name:             "google_tcp",
+		Gens:             10,
+		Proto:            "tcp",
+		SuccessThreshold: 0.95,
+		Filters:          fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", googleHostListPath),
 		Targets: []types.Target{
 			{URL: "https://rr1---sn-gvnuxaxjvh-jx3z.googlevideo.com", Threshold: 100, IgnoreStatus: true, Proto: types.ProtoTCP},
 			{URL: "https://manifest.googlevideo.com/100MB", Threshold: 100, IgnoreStatus: true, Proto: types.ProtoTCP},
@@ -21,9 +23,11 @@ func init() {
 	})
 
 	registerProvider(types.ProviderDefinition{
-		Name:    "google_udp",
-		Gens:    10,
-		Filters: fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", googleHostListPath),
+		Name:             "google_udp",
+		Gens:             10,
+		Proto:            "udp",
+		SuccessThreshold: 0.95,
+		Filters:          fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", googleHostListPath),
 		Targets: []types.Target{
 			{URL: "https://manifest.googlevideo.com/100MB", Threshold: 100, IgnoreStatus: true, Proto: types.ProtoQUIC},
 			{URL: "https://googlevideo.com", Threshold: 1, Proto: types.ProtoQUIC, IgnoreStatus: true},

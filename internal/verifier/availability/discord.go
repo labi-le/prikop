@@ -8,8 +8,10 @@ func init() {
 	return
 
 	registerProvider(types.ProviderDefinition{
-		Name: "discord_tcp",
-		Gens: 5,
+		Name:             "discord_tcp",
+		Gens:             5,
+		Proto:            "tcp",
+		SuccessThreshold: 0.95,
 		Targets: []types.Target{
 			{URL: "https://discord.com", Threshold: 5000, Proto: types.ProtoTCP},
 			{URL: "https://discord.com/assets/b135ff6c8e091b43.mp3", Threshold: 1000, Proto: types.ProtoTCP},
@@ -20,8 +22,10 @@ func init() {
 	})
 
 	registerProvider(types.ProviderDefinition{
-		Name: "discord_udp",
-		Gens: 5,
+		Name:             "discord_udp",
+		Gens:             5,
+		Proto:            "udp",
+		SuccessThreshold: 0.95,
 		Targets: []types.Target{
 			{URL: "https://discord.com", Threshold: 1000, Proto: types.ProtoQUIC},
 			{URL: "https://gateway.discord.gg", Threshold: 1000, Proto: types.ProtoQUIC},
@@ -29,8 +33,10 @@ func init() {
 	})
 
 	registerProvider(types.ProviderDefinition{
-		Name: "discord_l7",
-		Gens: 5,
+		Name:             "discord_l7",
+		Gens:             5,
+		Proto:            "udp",
+		SuccessThreshold: 0.95,
 		Targets: []types.Target{
 			{URL: "50.7.85.202:50001", Proto: types.ProtoSTUN},
 			{URL: "50.7.85.202:50002", Proto: types.ProtoSTUN},

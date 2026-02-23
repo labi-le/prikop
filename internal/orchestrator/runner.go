@@ -27,8 +27,13 @@ type Config struct {
 }
 
 type config struct {
-	Config   string
-	Provider string
+	Strategy string
+	Filters  []string
+	Provider []string
+}
+
+func (c *config) FullConfig() string {
+	return fmt.Sprintf("%s %s", strings.Join(c.Filters, " "), c.Strategy)
 }
 
 var pool *container.WorkerPool
@@ -117,7 +122,11 @@ func Run(cfg Config, log zerolog.Logger) {
 
 func runProviders(ctx context.Context, opt *Optimizer, providers []types.ProviderDefinition, bins []string, report model.ReconReport, log zerolog.Logger) {
 	var mu sync.Mutex
-	var finalConfigs []config
+	var rawConfigs []struct {
+		Strategy string
+		Filters  string
+		Provider string
+	}
 
 	sem := make(chan struct{}, model.MaxConcurrentProviders)
 	var wg sync.WaitGroup
@@ -127,13 +136,12 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 			break
 		}
 
-		gens := p.Gens
-		if gens == 0 {
-			gens = 3
+		if p.Gens == 0 {
+			p.Gens = 3
 		}
 
 		wg.Add(1)
-		go func(p types.ProviderDefinition, gens int) {
+		go func(p types.ProviderDefinition) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
@@ -145,89 +153,115 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 			provLogger := log.With().Str("provider", p.Name).Logger()
 			provLogger.Info().Msg("Executing provider")
 
-			best := opt.RunPhase(ctx, p.Name, bins, gens, report, p.Filters)
+			best := opt.RunPhase(ctx, p, bins, report)
 			if ctx.Err() != nil {
 				return
 			}
 
-			if best != nil && best.Result.SuccessCount > 0 && best.Result.SuccessCount*2 >= best.Result.TotalCount {
+			if best != nil && best.Result.SuccessCount > 0 && float64(best.Result.SuccessCount)/float64(best.Result.TotalCount) >= 0.5 {
 				strategyArgs := best.Config.String()
 				provLogger.Info().Str("winner", strategyArgs).Msg("Provider finished with a winning strategy")
-				block := fmt.Sprintf("%s %s", p.Filters, strategyArgs)
 
 				mu.Lock()
-				finalConfigs = append(finalConfigs, config{
-					Config:   block,
+				rawConfigs = append(rawConfigs, struct {
+					Strategy string
+					Filters  string
+					Provider string
+				}{
+					Strategy: strategyArgs,
+					Filters:  p.Filters,
 					Provider: p.Name,
 				})
 				mu.Unlock()
 			} else {
 				provLogger.Warn().Msg("Provider failed: No working strategy found")
 			}
-		}(p, gens)
+		}(p)
 	}
 
 	wg.Wait()
 
-	finalConfigs = optimizeStrategies(finalConfigs)
+	finalConfigs := optimizeStrategies(rawConfigs)
 	printFinalConfig(finalConfigs)
 }
 
-// optimizeStrategies merges duplicate strategies across providers to create a shorter config
-func optimizeStrategies(configsWithProvider []config) []config {
-	if len(configsWithProvider) == 0 {
-		return configsWithProvider
+// optimizeStrategies merges duplicate strategies across providers
+func optimizeStrategies(raw []struct {
+	Strategy string
+	Filters  string
+	Provider string
+}) []config {
+	if len(raw) == 0 {
+		return nil
 	}
 
-	// Group by unique config string
-	uniqueConfigs := make(map[string][]string) // config -> list of providers
-	for _, c := range configsWithProvider {
-		uniqueConfigs[c.Config] = append(uniqueConfigs[c.Config], c.Provider)
+	// Group by Strategy
+	groups := make(map[string]*config)
+	for _, r := range raw {
+		if c, ok := groups[r.Strategy]; ok {
+			c.Provider = append(c.Provider, r.Provider)
+			if r.Filters != "" {
+				// Deduplicate filters
+				found := false
+				for _, existing := range c.Filters {
+					if existing == r.Filters {
+						found = true
+						break
+					}
+				}
+				if !found {
+					c.Filters = append(c.Filters, r.Filters)
+				}
+			}
+		} else {
+			filters := []string{}
+			if r.Filters != "" {
+				filters = append(filters, r.Filters)
+			}
+			groups[r.Strategy] = &config{
+				Strategy: r.Strategy,
+				Filters:  filters,
+				Provider: []string{r.Provider},
+			}
+		}
 	}
 
-	// Build optimized result
-	var optimized []config
-	for cfg, providers := range uniqueConfigs {
-		providerList := strings.Join(providers, ", ")
-		optimized = append(optimized, config{
-			Config:   cfg,
-			Provider: providerList,
-		})
+	var result []config
+	for _, c := range groups {
+		result = append(result, *c)
 	}
 
 	// Sort for consistent output
-	sort.Slice(optimized, func(i, j int) bool {
-		return optimized[i].Provider < optimized[j].Provider
+	sort.Slice(result, func(i, j int) bool {
+		return strings.Join(result[i].Provider, ",") < strings.Join(result[j].Provider, ",")
 	})
 
-	return optimized
+	return result
 }
 
-func printFinalConfig(configsWithProvider []config) {
+func printFinalConfig(configs []config) {
 	fmt.Println(">>> 🎉 FINAL CONFIGURATION")
 	fmt.Println()
 
-	if len(configsWithProvider) == 0 {
+	if len(configs) == 0 {
 		fmt.Println("# No working strategies found.")
 		return
 	}
 
-	var outputLines []string
-	for i, configWithProvider := range configsWithProvider {
-		commentLine := fmt.Sprintf("# %d: %s", i+1, configWithProvider.Provider)
-		outputLines = append(outputLines, commentLine)
+	for i, c := range configs {
+		fmt.Printf("# %d: %s\n", i+1, strings.Join(c.Provider, ", "))
 
-		args := strings.Fields(configWithProvider.Config)
-		for _, arg := range args {
-			outputLines = append(outputLines, arg)
+		// Print filters
+		for _, f := range c.Filters {
+			fmt.Println(f)
 		}
 
-		if i < len(configsWithProvider)-1 {
-			outputLines = append(outputLines, "--new")
+		// Print strategy
+		fmt.Println(c.Strategy)
+
+		if i < len(configs)-1 {
+			fmt.Println("--new")
 		}
 	}
-
-	finalStr := strings.Join(outputLines, "\n")
-	fmt.Println(finalStr)
 	fmt.Println()
 }

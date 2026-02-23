@@ -7,6 +7,7 @@ import (
 	"prikop/internal/galaxy"
 	"prikop/internal/model"
 	"prikop/internal/nfqws"
+	"prikop/internal/verifier/types"
 	"sort"
 	"strings"
 	"sync"
@@ -20,7 +21,6 @@ const (
 	MaxComplexityTCP    = 3
 	MaxComplexityUDP    = 6
 	SimpleComplexity    = 1
-	WorkerLimit         = 50
 )
 
 // Optimizer handles the evolutionary process for a specific phase
@@ -35,34 +35,43 @@ func NewOptimizer(pool *container.WorkerPool, log zerolog.Logger) *Optimizer {
 
 func (o *Optimizer) RunPhase(
 	ctx context.Context,
-	group string,
+	p types.ProviderDefinition,
 	bins []string,
-	maxGens int,
 	report model.ReconReport,
-	filters string,
 ) *model.ScoredStrategy {
-	proto := "tcp"
-	if strings.Contains(group, "udp") || strings.Contains(group, "l7") {
-		proto = "udp"
+	proto := p.Proto
+	if proto == "" {
+		proto = "tcp"
 	}
-	phaseLog := o.log.With().Str("group", group).Str("proto", proto).Str("filters", filters).Logger()
+
+	threshold := p.SuccessThreshold
+	if threshold == 0 {
+		threshold = 1.0
+	}
+
+	phaseLog := o.log.With().Str("group", p.Name).Str("proto", proto).Str("filters", p.Filters).Logger()
 
 	population := galaxy.GenerateZeroGeneration(bins, report, proto)
 	var globalBest *model.ScoredStrategy
 
-	phaseLog.Info().Msg("Starting phase")
+	phaseLog.Info().Float64("threshold", threshold).Msg("Starting phase")
 
-	for gen := 0; gen < maxGens; gen++ {
+	for gen := 0; gen < p.Gens; gen++ {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
 		}
 
-		genLog := phaseLog.With().Int("gen", gen).Int("max_gens", maxGens).Int("population", len(population)).Logger()
+		genLog := phaseLog.With().Int("gen", gen).Int("max_gens", p.Gens).Int("population", len(population)).Logger()
 		genLog.Info().Msg("Starting generation")
 
-		results := o.executeBatch(ctx, population, group, filters)
+		maxTargets := 0
+		if gen == 0 {
+			maxTargets = 1
+		}
+
+		results := o.executeBatch(ctx, population, p.Name, p.Filters, maxTargets)
 
 		if ctx.Err() != nil {
 			return nil
@@ -96,21 +105,25 @@ func (o *Optimizer) RunPhase(
 			}
 		}
 
-		if globalBest != nil && globalBest.Result.SuccessCount > 0 && globalBest.Result.SuccessCount == globalBest.Result.TotalCount && gen > MinGensForIdealExit {
-			sBest, _ := globalBest.Config.(nfqws.Strategy)
-			isMasking := strings.Contains(sBest.Mode, "fake") || strings.Contains(sBest.Mode, "hostfake")
-			maxComp := MaxComplexityTCP
-			if proto == "udp" {
-				maxComp = MaxComplexityUDP
-			}
+		if globalBest != nil && globalBest.Result.SuccessCount > 0 && gen > MinGensForIdealExit {
+			successRate := float64(globalBest.Result.SuccessCount) / float64(globalBest.Result.TotalCount)
 
-			if (isMasking && globalBest.Complexity <= maxComp) || globalBest.Complexity == SimpleComplexity {
-				genLog.Info().Msg("Ideal strategy found (Masking/Simple), skipping remaining generations.")
-				break
+			if successRate >= threshold {
+				sBest, _ := globalBest.Config.(nfqws.Strategy)
+				isMasking := strings.Contains(sBest.Mode, "fake") || strings.Contains(sBest.Mode, "hostfake")
+				maxComp := MaxComplexityTCP
+				if proto == "udp" {
+					maxComp = MaxComplexityUDP
+				}
+
+				if (isMasking && globalBest.Complexity <= maxComp) || globalBest.Complexity == SimpleComplexity {
+					genLog.Info().Float64("rate", successRate).Msg("Ideal strategy found (Masking/Simple), skipping remaining generations.")
+					break
+				}
 			}
 		}
 
-		population = evolution.Evolve(results, bins, proto, report, genLog)
+		population = evolution.Evolve(results, globalBest, bins, proto, report, genLog)
 
 		if len(population) == 0 {
 			genLog.Warn().Msg("Population extinct. Regenerating fresh generation to continue search.")
@@ -136,23 +149,21 @@ func (o *Optimizer) logNewBest(log zerolog.Logger, best *model.ScoredStrategy) {
 	}
 }
 
-func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, group string, filters string) []model.ScoredStrategy {
+func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, group string, filters string, maxTargets int) []model.ScoredStrategy {
 	var wg sync.WaitGroup
 	results := make([]model.ScoredStrategy, len(strats))
-
 	filterArgs := strings.Fields(filters)
-	limit := make(chan struct{}, WorkerLimit)
+
+	type resultEntry struct {
+		idx int
+		s   model.ScoredStrategy
+	}
+	resChan := make(chan resultEntry, len(strats))
 
 	for i, s := range strats {
-		if ctx.Err() != nil {
-			break
-		}
-
 		wg.Add(1)
 		go func(idx int, strat nfqws.Strategy) {
 			defer wg.Done()
-			limit <- struct{}{}
-			defer func() { <-limit }()
 
 			if ctx.Err() != nil {
 				return
@@ -163,8 +174,10 @@ func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, g
 				StrategyArgs: strat.ToArgs(),
 				TargetGroup:  group,
 				Filters:      filterArgs,
+				MaxTargets:   maxTargets,
 			}
 
+			// We don't use a local limit here, we rely on the Pool's internal worker channel
 			res, err := o.Pool.Exec(ctx, req)
 
 			duration := time.Since(start)
@@ -180,9 +193,30 @@ func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, g
 				scored.Result.Error = err.Error()
 			}
 
-			results[idx] = scored
+			resChan <- resultEntry{idx: idx, s: scored}
 		}(i, s)
 	}
-	wg.Wait()
+
+	// Helper to close channel when all goroutines finished
+	go func() {
+		wg.Wait()
+		close(resChan)
+	}()
+
+	// Collect results from channel
+	collected := 0
+	for collected < len(strats) {
+		select {
+		case r, ok := <-resChan:
+			if !ok {
+				return results
+			}
+			results[r.idx] = r.s
+			collected++
+		case <-ctx.Done():
+			return results
+		}
+	}
+
 	return results
 }

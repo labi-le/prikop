@@ -22,6 +22,7 @@ type WorkerRequest struct {
 	StrategyArgs []string `json:"strategy_args"`
 	Filters      []string `json:"filters"`
 	TargetGroup  string   `json:"target_group"`
+	MaxTargets   int      `json:"max_targets"` // 0 means all
 }
 
 // StrategyConfig — это интерфейс, который должна реализовать стратегия NFQWS
@@ -66,6 +67,7 @@ const (
 	ReasonThrottle FailureReason = "throttle" // DPI Shaping/Slowdown
 	ReasonDNS      FailureReason = "dns"      // DNS resolution failure
 	ReasonCIDR     FailureReason = "cidr"     // Target IP not in CIDR range
+	ReasonSkip     FailureReason = "skip"     // Inconclusive result (probably unreachable)
 	ReasonUnknown  FailureReason = "unknown"
 
 	ReasonTLSALPN             FailureReason = "tls_alpn"              // DPI навязал ALPN (h2/http1.1) без запроса

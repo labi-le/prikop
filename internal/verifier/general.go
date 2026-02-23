@@ -20,9 +20,9 @@ func (v *GeneralVerifier) Name() string {
 	return fmt.Sprintf("Verifier (%s)", v.Mode)
 }
 
-func (v *GeneralVerifier) Run(ctx context.Context) types.CheckResult {
+func (v *GeneralVerifier) Run(ctx context.Context, maxTargets int) types.CheckResult {
 	if len(v.Targets) == 0 {
 		return types.CheckResult{Success: false, Details: "No targets defined"}
 	}
-	return checker.ExecuteChecks(ctx, v.Log, v.Targets, v.CIDRPath)
+	return checker.ExecuteChecks(ctx, v.Log, v.Targets, v.CIDRPath, maxTargets)
 }

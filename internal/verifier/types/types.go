@@ -39,7 +39,7 @@ type CheckResult struct {
 
 type Verifier interface {
 	Name() string
-	Run(ctx context.Context) CheckResult
+	Run(ctx context.Context, maxTargets int) CheckResult
 }
 
 type Target struct {
@@ -53,10 +53,12 @@ type Target struct {
 }
 
 type ProviderDefinition struct {
-	Name       string
-	CIDRSource string
-	CIDRFile   string
-	Targets    []Target
-	Gens       int
-	Filters    string
+	Name             string
+	CIDRSource       string
+	CIDRFile         string
+	Targets          []Target
+	Gens             int
+	Filters          string
+	Proto            string  // "tcp" or "udp"
+	SuccessThreshold float64 // 0.0 to 1.0, defaults to 1.0 if 0
 }

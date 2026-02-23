@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	mrand "math/rand"
 	"net"
 	"net/http"
 	"net/url"
@@ -39,24 +40,29 @@ const (
 	StunTypeBindingSuccess  = 0x0111
 )
 
-// reasonSkip marks an inconclusive result — not a pass, not a hard failure.
-// Corresponds to JS "skip", "probably detected", "possible detected", "unlikely".
-const reasonSkip model.FailureReason = "skip"
-
 type checkResult struct {
 	reason model.FailureReason
 	detail string
 }
 
 var okResult = checkResult{reason: model.ReasonNone}
-var skipResult = checkResult{reason: reasonSkip}
 
 func failResult(reason model.FailureReason, detail string) checkResult {
 	return checkResult{reason: reason, detail: detail}
 }
 
-func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Target, cidrPath string) types.CheckResult {
-	log.Info().Int("target_count", len(targets)).Str("cidr_file", cidrPath).Msg("Verifying group (TCP 16-20 Logic)")
+func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Target, cidrPath string, maxTargets int) types.CheckResult {
+	allTargets := make([]types.Target, len(targets))
+	copy(allTargets, targets)
+
+	if maxTargets > 0 && maxTargets < len(allTargets) {
+		mrand.Shuffle(len(allTargets), func(i, j int) {
+			allTargets[i], allTargets[j] = allTargets[j], allTargets[i]
+		})
+		allTargets = allTargets[:maxTargets]
+	}
+
+	log.Info().Int("target_count", len(allTargets)).Int("total_available", len(targets)).Str("cidr_file", cidrPath).Msg("Verifying group (TCP 16-20 Logic)")
 
 	var cidrList []*net.IPNet
 	if cidrPath != "" {
@@ -73,7 +79,7 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 	var failed []string
 	errorCounts := make(map[model.FailureReason]int)
 
-	for _, t := range targets {
+	for _, t := range allTargets {
 		wg.Add(1)
 		go func(tgt types.Target) {
 			defer wg.Done()
@@ -99,32 +105,33 @@ func ExecuteChecks(ctx context.Context, log zerolog.Logger, targets []types.Targ
 
 			if res.reason == model.ReasonNone {
 				passed = append(passed, tgt.URL)
-			} else if res.reason == reasonSkip {
-				// Inconclusive — JS "skip/probably/possible/unlikely detected".
-				// Do not count as pass or fail; just log.
-				log.Debug().
-					Str("url", tgt.URL).
-					Str("proto", tgt.Proto.String()).
-					Str("detail", res.detail).
-					Dur("elapsed", elapsed).
-					Msg("Target result inconclusive (skip)")
 			} else {
 				failed = append(failed, tgt.URL)
 				errorCounts[res.reason]++
-				log.Warn().
-					Str("url", tgt.URL).
-					Str("proto", tgt.Proto.String()).
-					Str("reason", string(res.reason)).
-					Str("detail", res.detail).
-					Dur("elapsed", elapsed).
-					Send()
+
+				if res.reason == model.ReasonSkip {
+					log.Debug().
+						Str("url", tgt.URL).
+						Str("proto", tgt.Proto.String()).
+						Str("detail", res.detail).
+						Dur("elapsed", elapsed).
+						Msg("Target result inconclusive (skip)")
+				} else {
+					log.Warn().
+						Str("url", tgt.URL).
+						Str("proto", tgt.Proto.String()).
+						Str("reason", string(res.reason)).
+						Str("detail", res.detail).
+						Dur("elapsed", elapsed).
+						Send()
+				}
 			}
 		}(t)
 	}
 
 	wg.Wait()
 
-	result := summarizeResults(passed, failed, targets, errorCounts)
+	result := summarizeResults(passed, failed, allTargets, errorCounts)
 
 	log.Info().
 		Bool("success", result.Success).
@@ -251,7 +258,7 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 		reason := AnalyzeError(err)
 		if reason == model.ReasonTimeout {
 			// JS: AbortError on HEAD → alive=false, possibleAlive=false → skip
-			return skipResult
+			return failResult(model.ReasonSkip, "HEAD timeout (target dead/unreachable)")
 		}
 		// JS: other error on HEAD → alive=false, possibleAlive=true → continue to POST
 		alive = false
@@ -286,10 +293,10 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 				return failResult(model.ReasonThrottle, fmt.Sprintf("POST timed out after %v (DPI detected)", time.Since(startPost)))
 			}
 			// JS: HEAD instant error + POST timeout → probably detected ⚠️ (SKIP)
-			return skipResult
+			return failResult(model.ReasonSkip, "POST timeout with dead HEAD (probably detected)")
 		}
 		// JS: POST instant error (any alive value) → possible/unlikely detected ⚠️ (SKIP)
-		return skipResult
+		return failResult(model.ReasonSkip, fmt.Sprintf("POST instant error: %v", err))
 	}
 	defer respPost.Body.Close()
 
@@ -366,13 +373,15 @@ func checkSTUN(ctx context.Context, t types.Target) checkResult {
 
 func summarizeResults(passed, failed []string, targets []types.Target, errorCounts map[model.FailureReason]int) types.CheckResult {
 	finalReason := model.ReasonNone
-	if len(passed) == 0 && len(failed) > 0 {
+	if len(failed) > 0 {
 		if errorCounts[model.ReasonReset] > 0 {
 			finalReason = model.ReasonReset
 		} else if errorCounts[model.ReasonThrottle] > 0 {
 			finalReason = model.ReasonThrottle
 		} else if errorCounts[model.ReasonTimeout] > 0 {
 			finalReason = model.ReasonTimeout
+		} else if errorCounts[model.ReasonSkip] > 0 {
+			finalReason = model.ReasonSkip
 		} else {
 			// Pick the most frequent TLS sub-reason, or unknown
 			finalReason = model.ReasonUnknown
