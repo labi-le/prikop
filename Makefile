@@ -6,6 +6,8 @@ HOST_SOCKET_DIR ?= /tmp/prikop_sockets
 HOST_TARGETS_DIR ?= $(CURRENT_DIR)/targets
 PROVIDER ?=
 
+NIX_RUN := nix-shell --run
+
 run: build
 	mkdir -p $(HOST_SOCKET_DIR)
 	mkdir -p $(HOST_TARGETS_DIR)
@@ -28,4 +30,4 @@ context:
 	./generate_context.sh . -e targets -e internal/verifier -e '*_test.go' > context.md
 
 generate:
-	go generate ./...
+	$(NIX_RUN) "go generate ./..."
