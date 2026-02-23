@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"prikop/internal/container"
 	"prikop/internal/model"
+	"prikop/internal/nfqws"
 	"prikop/internal/scout"
 	"prikop/internal/verifier/availability"
 	"prikop/internal/verifier/checker"
@@ -120,6 +121,12 @@ func Run(cfg Config, log zerolog.Logger) {
 	runProviders(ctx, optimizer, allProviders, discoveredBins, report, log)
 }
 
+var (
+	globalBestTCP *nfqws.Strategy
+	globalBestUDP *nfqws.Strategy
+	globalMu      sync.Mutex
+)
+
 func runProviders(ctx context.Context, opt *Optimizer, providers []types.ProviderDefinition, bins []string, report model.ReconReport, log zerolog.Logger) {
 	var mu sync.Mutex
 	var rawConfigs []struct {
@@ -150,10 +157,20 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 				return
 			}
 
+			// Determine which global seed to use
+			var seed *nfqws.Strategy
+			globalMu.Lock()
+			if p.Proto == "udp" {
+				seed = globalBestUDP
+			} else {
+				seed = globalBestTCP
+			}
+			globalMu.Unlock()
+
 			provLogger := log.With().Str("provider", p.Name).Logger()
 			provLogger.Info().Msg("Executing provider")
 
-			best := opt.RunPhase(ctx, p, bins, report)
+			best := opt.RunPhase(ctx, p, bins, report, seed)
 			if ctx.Err() != nil {
 				return
 			}
@@ -161,6 +178,21 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 			if best != nil && best.Result.SuccessCount > 0 && float64(best.Result.SuccessCount)/float64(best.Result.TotalCount) >= 0.5 {
 				strategyArgs := best.Config.String()
 				provLogger.Info().Str("winner", strategyArgs).Msg("Provider finished with a winning strategy")
+
+				// Try to cast back to Strategy to update global best
+				if s, ok := best.Config.(nfqws.Strategy); ok {
+					globalMu.Lock()
+					if p.Proto == "udp" {
+						if globalBestUDP == nil {
+							globalBestUDP = &s
+						}
+					} else {
+						if globalBestTCP == nil {
+							globalBestTCP = &s
+						}
+					}
+					globalMu.Unlock()
+				}
 
 				mu.Lock()
 				rawConfigs = append(rawConfigs, struct {

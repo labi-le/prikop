@@ -38,6 +38,7 @@ func (o *Optimizer) RunPhase(
 	p types.ProviderDefinition,
 	bins []string,
 	report model.ReconReport,
+	seed *nfqws.Strategy,
 ) *model.ScoredStrategy {
 	proto := p.Proto
 	if proto == "" {
@@ -51,7 +52,28 @@ func (o *Optimizer) RunPhase(
 
 	phaseLog := o.log.With().Str("group", p.Name).Str("proto", proto).Str("filters", p.Filters).Logger()
 
+	// --- PRE-FLIGHT CHECK (Reuse Global Best) ---
+	if seed != nil {
+		phaseLog.Info().Str("seed", seed.String()).Msg("Testing seed strategy (Global Best)")
+		seedResults := o.executeBatch(ctx, []nfqws.Strategy{*seed}, p.Name, p.Filters, 0) // Test on all targets
+		if len(seedResults) > 0 {
+			res := seedResults[0]
+			successRate := float64(res.Result.SuccessCount) / float64(res.Result.TotalCount)
+			if successRate >= threshold {
+				phaseLog.Info().Float64("rate", successRate).Msg("Seed strategy works perfectly. Skipping evolution.")
+				return &res
+			}
+			phaseLog.Debug().Float64("rate", successRate).Msg("Seed strategy insufficient, starting evolution.")
+		}
+	}
+
 	population := galaxy.GenerateZeroGeneration(bins, report, proto)
+
+	// If seed didn't pass but is of same protocol, inject it as a strong parent
+	if seed != nil && ((proto == "tcp" && !strings.Contains(seed.Mode, "udp")) || (proto == "udp" && strings.Contains(seed.Mode, "udp"))) {
+		population = append(population, *seed)
+	}
+
 	var globalBest *model.ScoredStrategy
 
 	phaseLog.Info().Float64("threshold", threshold).Msg("Starting phase")

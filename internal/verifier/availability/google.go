@@ -10,7 +10,7 @@ const googleHostListPath = "/app/targets"
 func init() {
 	registerProvider(types.ProviderDefinition{
 		Name:             "google_tcp",
-		Gens:             10,
+		Gens:             2,
 		Proto:            "tcp",
 		SuccessThreshold: 0.95,
 		Filters:          fmt.Sprintf("--filter-tcp=80,443 --hostlist=%s/google.txt", googleHostListPath),
@@ -24,7 +24,7 @@ func init() {
 
 	registerProvider(types.ProviderDefinition{
 		Name:             "google_udp",
-		Gens:             10,
+		Gens:             2,
 		Proto:            "udp",
 		SuccessThreshold: 0.95,
 		Filters:          fmt.Sprintf("--filter-udp=443 --filter-l7=quic --hostlist=%s/google.txt", googleHostListPath),
