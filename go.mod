@@ -5,7 +5,7 @@ go 1.26
 require (
 	github.com/moby/moby/api v1.53.0
 	github.com/moby/moby/client v0.2.2
-	github.com/quic-go/quic-go v0.59.0
+	github.com/quic-go/quic-go v0.59.1
 	github.com/rs/zerolog v1.34.0
 )
 
