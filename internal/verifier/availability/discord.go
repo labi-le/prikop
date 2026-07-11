@@ -4,8 +4,15 @@ import (
 	"prikop/internal/verifier/types"
 )
 
+// discordEnabled gates the Discord providers. Disabled by default: the STUN/L7
+// targets are volatile and were excluded from routine optimization runs. Flip
+// to true to re-enable without touching the definitions below.
+var discordEnabled = false
+
 func init() {
-	return
+	if !discordEnabled {
+		return
+	}
 
 	registerProvider(types.ProviderDefinition{
 		Name:             "discord_tcp",
