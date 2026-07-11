@@ -11,7 +11,6 @@ type Protocol int
 const (
 	ProtoTCP Protocol = iota
 	ProtoQUIC
-	ProtoSTUN
 )
 
 func (p Protocol) String() string {
@@ -20,8 +19,6 @@ func (p Protocol) String() string {
 		return "tcp"
 	case ProtoQUIC:
 		return "quic"
-	case ProtoSTUN:
-		return "stun"
 	default:
 		return "unknown"
 	}

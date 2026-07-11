@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
-	"encoding/binary"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -30,14 +29,6 @@ const (
 	PostPayloadSize = 64 * 1024
 
 	UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-	StunDefaultPort         = ":3478"
-	StunRetries             = 3
-	StunRetryInterval       = 200 * time.Millisecond
-	StunTypeBindingRequest  = 0x0001
-	StunMagicCookie         = 0x2112A442
-	StunTypeBindingResponse = 0x0101
-	StunTypeBindingSuccess  = 0x0111
 )
 
 type checkResult struct {
@@ -222,8 +213,6 @@ func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 	}
 
 	switch t.Proto {
-	case types.ProtoSTUN:
-		return checkSTUN(ctx, t)
 	case types.ProtoTCP, types.ProtoQUIC:
 		client, cleanup := createHttpClient(t.Proto, t.Timeout, t.SNI)
 		defer cleanup()
@@ -323,54 +312,6 @@ func setCommonHeaders(req *http.Request) {
 	// JS: cache: "no-store"
 	req.Header.Set("Cache-Control", "no-store")
 	req.Header.Set("Pragma", "no-cache")
-}
-
-func checkSTUN(ctx context.Context, t types.Target) checkResult {
-	address := strings.TrimPrefix(t.URL, "https://")
-	address = strings.TrimPrefix(address, "http://")
-	if !strings.Contains(address, ":") {
-		address += StunDefaultPort
-	}
-
-	d := net.Dialer{Timeout: t.Timeout}
-	conn, err := d.DialContext(ctx, "udp", address)
-	if err != nil {
-		return failResult(model.ReasonTimeout, fmt.Sprintf("dial: %s", err))
-	}
-	defer conn.Close()
-
-	reqBuf := make([]byte, 20)
-	binary.BigEndian.PutUint16(reqBuf[0:2], StunTypeBindingRequest)
-	binary.BigEndian.PutUint16(reqBuf[2:4], 0x0000)
-	binary.BigEndian.PutUint32(reqBuf[4:8], StunMagicCookie)
-	rand.Read(reqBuf[8:20])
-
-	var lastErr error
-	for i := 0; i < StunRetries; i++ {
-		if _, err := conn.Write(reqBuf); err != nil {
-			return failResult(model.ReasonTimeout, fmt.Sprintf("write: %s", err))
-		}
-
-		conn.SetReadDeadline(time.Now().Add(t.Timeout))
-		resp := make([]byte, 1024)
-		n, err := conn.Read(resp)
-		if err != nil {
-			lastErr = err
-		} else if n >= 20 {
-			msgType := binary.BigEndian.Uint16(resp[0:2])
-			if msgType == StunTypeBindingResponse || msgType == StunTypeBindingSuccess {
-				return okResult
-			}
-			lastErr = fmt.Errorf("unexpected STUN type 0x%04x", msgType)
-		}
-		time.Sleep(StunRetryInterval)
-	}
-
-	detail := fmt.Sprintf("no response after %d retries", StunRetries)
-	if lastErr != nil {
-		detail = fmt.Sprintf("%s: %s", detail, lastErr)
-	}
-	return failResult(model.ReasonTimeout, detail)
 }
 
 func summarizeResults(passed, failed []string, targets []types.Target, errorCounts map[model.FailureReason]int) types.CheckResult {
