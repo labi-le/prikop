@@ -1,434 +1,278 @@
 package galaxy
 
 import (
-	"math/rand"
 	"prikop/internal/evolution"
 	"prikop/internal/model"
-	"prikop/internal/nfqws"
-	"sort"
-	"strings"
+	"prikop/internal/nfqws2"
 )
 
-// GenerateZeroGeneration creates targeted strategies based on discovered bins and PROTOCOL
-func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, proto string) []nfqws.Strategy {
-	tlsBins, quicBins := findRelevantBins(discoveredBins, proto)
-	var population []nfqws.Strategy
+// GenerateZeroGeneration builds the initial nfqws2 population for a protocol.
+//
+// The v2 genome expresses every desync as an ordered list of lua-desync action
+// instances (Strategy.Actions) behind a profile Filter, so the v1 "Mode"/option
+// bag is gone: a v1 "fake,multisplit" directive becomes TWO ordered Actions.
+// Blobs are the auto-initialized defaults (fake_default_tls / fake_default_quic)
+// or inline 0xHEX; no /app/fake/*.bin file paths are referenced yet, which makes
+// discoveredBins currently advisory only. Generation is fully deterministic.
+func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, proto string) []nfqws2.Strategy {
+	if proto == "udp" {
+		pop := generateUDP()
+		if report.BadSumWorks {
+			// badsum-fooled QUIC fake: cheap corruption the DPI drops but the
+			// server ignores, when the recon proved bad checksums survive NAT.
+			pop = append(pop, udpStrat(fakeQUIC(
+				nfqws2.P("repeats", "4"), nfqws2.Flag("badsum"),
+			)))
+		}
+		return pop
+	}
+
+	var pop []nfqws2.Strategy
+	// 1. Curated high-efficacy imports (the Yv series), translated to v2.
+	pop = append(pop, generateImportedStrategies()...)
+	// 2. SNI-independent structural archetypes.
+	pop = append(pop, generateTCPStatic()...)
+	// 3. SNI/host-bearing archetypes, one per common target.
+	pop = append(pop, generateTCPPerTarget()...)
+	// 4. Plain-HTTP profile archetypes.
+	pop = append(pop, generateHTTP()...)
 
 	if report.BadSumWorks {
-		population = append(population, nfqws.Strategy{
-			Mode: "fake", Repeats: 2,
-			Fooling: nfqws.FoolingSet{BadSum: true},
-		})
-		population = append(population, nfqws.Strategy{
-			Mode: "fake,multidisorder", Repeats: 2,
-			Fooling: nfqws.FoolingSet{BadSum: true},
-			Split:   nfqws.SplitOptions{Pos: "1,sniext"},
-		})
-	}
-	if report.IPFragWorks {
-		population = append(population, nfqws.Strategy{
-			Mode: "ipfrag1", Repeats: 2,
-		})
+		pop = append(pop,
+			tcpStrat(fakeTLS("rnd,dupsid", nfqws2.P("repeats", "2"), nfqws2.Flag("badsum"))),
+			tcpStrat(
+				fakeTLS("rnd,dupsid", nfqws2.P("repeats", "2"), nfqws2.Flag("badsum")),
+				split("multidisorder", "1,sniext"),
+			),
+		)
 	}
 
-	if proto == "tcp" {
-		// 1. Import Known High-Efficacy Strategies (Yv Series)
-		population = append(population, generateImportedStrategies(discoveredBins)...)
-		// 2. Generate content-dependent strategies
-		population = append(population, generateTCPBinDependent(tlsBins)...)
-		// 3. Generate static strategies
-		population = append(population, generateTCPStatic()...)
-	} else {
-		population = append(population, generateUDPBinDependent(quicBins)...)
-	}
-
-	// 4. Procedural fillers
-	population = append(population, generateProcedural(discoveredBins, proto)...)
-
-	return population
+	return pop
 }
 
-func findRelevantBins(bins []string, proto string) ([]string, []string) {
-	var tlsBins, quicBins []string
+// ---- Profile filters -------------------------------------------------------
 
-	for _, b := range bins {
-		if proto == "tcp" {
-			if strings.Contains(b, "dtls") || strings.Contains(b, "quic") {
-				continue
-			}
-			if strings.Contains(b, "clienthello") {
-				tlsBins = append(tlsBins, b)
-			}
-		} else {
-			if strings.Contains(b, "quic") {
-				quicBins = append(quicBins, b)
-			}
-		}
-	}
-
-	sortPriority := func(slice []string, keyword string) {
-		sort.Slice(slice, func(i, j int) bool {
-			hasKeyI := strings.Contains(slice[i], keyword)
-			hasKeyJ := strings.Contains(slice[j], keyword)
-			if hasKeyI && !hasKeyJ {
-				return true
-			}
-			if !hasKeyI && hasKeyJ {
-				return false
-			}
-			return slice[i] < slice[j]
-		})
-	}
-
-	sortPriority(tlsBins, "google")
-	sortPriority(quicBins, "google")
-
-	return tlsBins, quicBins
+func tlsFilter() nfqws2.Filter {
+	return nfqws2.Filter{TCP: "80,443", L7: []string{"tls"}, Payload: []string{"tls_client_hello"}}
 }
 
-func generateImportedStrategies(bins []string) []nfqws.Strategy {
-	find := func(name string) string {
-		for _, b := range bins {
-			if strings.HasSuffix(b, name) {
-				return b
-			}
-		}
-		return ""
-	}
-
-	googleClientHello := find("tls_clienthello_www_google_com.bin")
-
-	var s []nfqws.Strategy
-
-	// Yv01
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:   "multisplit",
-			Tamper: nfqws.TamperOptions{IpId: "zero"},
-			Split:  nfqws.SplitOptions{Pos: "1", SeqOvl: 681, Pattern: googleClientHello},
-		})
-	}
-
-	// Yv02
-	s = append(s, nfqws.Strategy{
-		Mode:  "multisplit",
-		Split: nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
-	})
-
-	// Yv03
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "fake,multisplit",
-			Split:   nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: googleClientHello},
-			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=ggpht.com"},
-			Fooling: nfqws.FoolingSet{BadSum: true, BadSeq: true},
-		})
-	}
-
-	// Yv04
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:  "split2",
-			Split: nfqws.SplitOptions{SeqOvl: 681, Pattern: googleClientHello},
-		})
-	}
-
-	// Yv05
-	gosuslugiClientHello := find("tls_clienthello_gosuslugi_ru.bin")
-	vkClientHello := find("tls_clienthello_vk_com.bin")
-	if googleClientHello != "" && vkClientHello != "" && gosuslugiClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode: "fake,fakeddisorder",
-			Split: nfqws.SplitOptions{
-				Pos:          "10,midsld",
-				SeqOvl:       336,
-				Pattern:      gosuslugiClientHello,
-				FakedPattern: vkClientHello,
-			},
-			Fake:    nfqws.FakeOptions{TLS: "0x0F0F0F0F", TlsMod: "none"},
-			Fooling: nfqws.FoolingSet{BadSeq: true, BadSum: true, BadSeqIncrement: 0},
-		})
-	}
-
-	// Yv06
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "multidisorder",
-			Split:   nfqws.SplitOptions{Pos: "7,sld+1"},
-			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=www.google.com"},
-			Fooling: nfqws.FoolingSet{BadSeq: true},
-			TTL:     nfqws.TTLOptions{AutoStr: "2:2-12"},
-		})
-	}
-
-	// Yv07
-	s = append(s, nfqws.Strategy{
-		Mode:    "multidisorder",
-		Split:   nfqws.SplitOptions{Pos: "1,midsld,endhost-1"},
-		Repeats: 2,
-		Fooling: nfqws.FoolingSet{Md5Sig: true},
-		Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=www.google.com"},
-	})
-
-	// Yv08
-	s = append(s, nfqws.Strategy{
-		Mode:    "fake,multisplit",
-		Fake:    nfqws.FakeOptions{TLS: "!", TlsMod: "rnd,dupsid,sni=www.google.com"},
-		Split:   nfqws.SplitOptions{Pos: "1,midsld"},
-		Repeats: 2,
-		Fooling: nfqws.FoolingSet{BadSeq: true},
-	})
-
-	// Yv09
-	googleQuicInitial := find("quic_initial_www_google_com.bin")
-	if googleQuicInitial != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "multidisorder",
-			Split:   nfqws.SplitOptions{Pos: "1,midsld"},
-			Repeats: 6,
-			Fooling: nfqws.FoolingSet{BadSeq: true, BadSeqIncrement: 2},
-			Fake:    nfqws.FakeOptions{Quic: googleQuicInitial},
-		})
-	}
-
-	// Yv10
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:  "multisplit",
-			Split: nfqws.SplitOptions{Pos: "1,2", SeqOvl: 4, Pattern: googleClientHello},
-			Fake:  nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=www.google.com"},
-		})
-	}
-
-	// Yv11
-	s = append(s, nfqws.Strategy{
-		Mode:  "multidisorder",
-		Split: nfqws.SplitOptions{Pos: "2,5,105,host+5,sld-1,endsld-5,endsld"},
-	})
-
-	// Yv12
-	s = append(s, nfqws.Strategy{
-		Mode:    "multidisorder",
-		Split:   nfqws.SplitOptions{Pos: "1,midsld"},
-		Repeats: 2,
-	})
-
-	// Yv13
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "fake,multidisorder",
-			Split:   nfqws.SplitOptions{Pos: "1", SeqOvl: 681, Pattern: googleClientHello},
-			Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=fonts.google.com"},
-			Repeats: 2,
-			Fooling: nfqws.FoolingSet{BadSeq: true, BadSeqIncrement: 10000000},
-		})
-	}
-
-	// Yv14
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "fake,multidisorder",
-			Split:   nfqws.SplitOptions{Pos: "10,midsld", SeqOvl: 336, Pattern: googleClientHello},
-			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=fonts.google.com"},
-			Fooling: nfqws.FoolingSet{BadSeq: true},
-		})
-	}
-
-	// Yv15
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "fake,multisplit",
-			Split:   nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 2108, Pattern: googleClientHello},
-			Fake:    nfqws.FakeOptions{TLS: googleClientHello, TlsMod: "rnd,dupsid,sni=ggpht.com"},
-			Fooling: nfqws.FoolingSet{BadSum: true, BadSeq: true},
-		})
-	}
-
-	// Yv16
-	s = append(s, nfqws.Strategy{
-		Mode:    "multisplit",
-		Split:   nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
-		Fooling: nfqws.FoolingSet{BadSum: true, BadSeq: true, BadSeqIncrement: 0},
-	})
-
-	// Yv17
-	s = append(s, nfqws.Strategy{
-		Mode:    "fakeddisorder",
-		Split:   nfqws.SplitOptions{Pos: "method+2"},
-		Fooling: nfqws.FoolingSet{Md5Sig: true},
-		Dup:     nfqws.DupOptions{Count: 1, Cutoff: "n2", Fooling: "md5sig"},
-	})
-
-	// Yv18
-	s = append(s, nfqws.Strategy{
-		Mode:    "fake,hostfakesplit",
-		Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=www.google.com"},
-		Split:   nfqws.SplitOptions{HostMod: "host=www.google.com,altorder=1"},
-		Fooling: nfqws.FoolingSet{Ts: true},
-		Tamper:  nfqws.TamperOptions{IpId: "zero"},
-	})
-
-	// Yv19
-	s = append(s, nfqws.Strategy{
-		Mode:    "hostfakesplit",
-		Split:   nfqws.SplitOptions{HostMod: "host=google.com"},
-		Fooling: nfqws.FoolingSet{Ts: true},
-	})
-
-	// Yv20
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "fake,fakedsplit",
-			Repeats: 6,
-			Fooling: nfqws.FoolingSet{Ts: true},
-			Tamper:  nfqws.TamperOptions{IpId: "zero"},
-			Split:   nfqws.SplitOptions{FakedPattern: "0x00"},
-			Fake:    nfqws.FakeOptions{TLS: googleClientHello},
-		})
-	}
-
-	// Yv21
-	if googleClientHello != "" {
-		s = append(s, nfqws.Strategy{
-			Mode:    "fake,multisplit",
-			Repeats: 8,
-			Fooling: nfqws.FoolingSet{Ts: true},
-			Tamper:  nfqws.TamperOptions{IpId: "zero"},
-			Split:   nfqws.SplitOptions{Pos: "1", SeqOvl: 681, Pattern: googleClientHello},
-			Fake:    nfqws.FakeOptions{TLS: googleClientHello},
-		})
-	}
-
-	return s
+func httpFilter() nfqws2.Filter {
+	return nfqws2.Filter{TCP: "80", L7: []string{"http"}, Payload: []string{"http_req"}}
 }
 
-func generateTCPBinDependent(tlsBins []string) []nfqws.Strategy {
-	var strategies []nfqws.Strategy
-
-	snis := evolution.CommonSNIs
-
-	for i, bin := range tlsBins {
-		sni := snis[i%len(snis)]
-
-		strategies = append(strategies, nfqws.Strategy{
-			Mode: "fake,multisplit", Repeats: 2,
-			Fake:  nfqws.FakeOptions{TLS: bin, TlsMod: "rnd,dupsid,sni=" + sni},
-			Split: nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: bin},
-		})
-		strategies = append(strategies, nfqws.Strategy{
-			Mode:  "fake,fakeddisorder",
-			Split: nfqws.SplitOptions{Pos: "10,midsld", SeqOvl: 336, Pattern: bin, FakedPattern: bin},
-			Fake:  nfqws.FakeOptions{TLS: bin, TlsMod: "rnd,dupsid,sni=" + sni},
-		})
-	}
-	return strategies
+func quicFilter() nfqws2.Filter {
+	return nfqws2.Filter{UDP: "443", L7: []string{"quic"}, Payload: []string{"quic_initial"}}
 }
 
-func generateTCPStatic() []nfqws.Strategy {
-	var strategies []nfqws.Strategy
-
-	strategies = append(strategies, nfqws.Strategy{
-		Mode: "multisplit", Split: nfqws.SplitOptions{Pos: "1,sniext+1", SeqOvl: 1},
-	})
-
-	strategies = append(strategies, nfqws.Strategy{
-		Mode: "multidisorder", Split: nfqws.SplitOptions{Pos: "1,midsld"}, Repeats: 2,
-	})
-
-	// Static hostfakesplit: independent of bin content
-	// Iterates ALL common SNIs/Hosts
-	for i, sni := range evolution.CommonSNIs {
-		host := evolution.CommonHosts[i%len(evolution.CommonHosts)]
-		strategies = append(strategies, nfqws.Strategy{
-			Mode:    "fake,hostfakesplit",
-			Fake:    nfqws.FakeOptions{TlsMod: "rnd,dupsid,sni=" + sni},
-			Split:   nfqws.SplitOptions{HostMod: "host=" + host},
-			Fooling: nfqws.FoolingSet{Ts: true},
-			Tamper:  nfqws.TamperOptions{IpId: "zero"},
-		})
-	}
-	return strategies
+func tcpStrat(actions ...nfqws2.Action) nfqws2.Strategy {
+	return nfqws2.Strategy{Filter: tlsFilter(), Actions: actions}
 }
 
-func generateUDPBinDependent(quicBins []string) []nfqws.Strategy {
-	var strategies []nfqws.Strategy
-	for _, bin := range quicBins {
-		strategies = append(strategies, nfqws.Strategy{
-			Mode: "fake", Repeats: 4, AnyProtocol: true, Cutoff: "d2",
-			Fake:    nfqws.FakeOptions{Quic: bin},
-			Fooling: nfqws.FoolingSet{Md5Sig: true},
-		})
-	}
-	return strategies
+func httpStrat(actions ...nfqws2.Action) nfqws2.Strategy {
+	return nfqws2.Strategy{Filter: httpFilter(), Actions: actions}
 }
 
-func generateProcedural(discoveredBins []string, proto string) []nfqws.Strategy {
-	var strategies []nfqws.Strategy
-
-	// Soft limit to prevent OOM if bins count is huge
-	limit := 150
-
-	bins := make([]string, len(discoveredBins))
-	copy(bins, discoveredBins)
-	rand.Shuffle(len(bins), func(i, j int) {
-		bins[i], bins[j] = bins[j], bins[i]
-	})
-
-	for _, binPath := range bins {
-		if len(strategies) >= limit {
-			break
-		}
-		if proto == "tcp" {
-			strategies = append(strategies, generateTCPProcedural(binPath)...)
-		} else {
-			strategies = append(strategies, generateUDPProcedural(binPath)...)
-		}
-	}
-	return strategies
+func udpStrat(actions ...nfqws2.Action) nfqws2.Strategy {
+	return nfqws2.Strategy{Filter: quicFilter(), Actions: actions}
 }
 
-// generateTCPProcedural now returns a strategy for EVERY common host
-func generateTCPProcedural(binPath string) []nfqws.Strategy {
-	if strings.Contains(binPath, "dtls") || !strings.Contains(binPath, "clienthello") {
-		return nil
+// ---- Action builders -------------------------------------------------------
+
+// split builds a split/disorder-family action with a leading pos param.
+func split(fn, pos string, extra ...nfqws2.Param) nfqws2.Action {
+	ps := make([]nfqws2.Param, 0, 1+len(extra))
+	if pos != "" {
+		ps = append(ps, nfqws2.P("pos", pos))
 	}
-	var strategies []nfqws.Strategy
-	isKyber := strings.Contains(binPath, "kyber")
+	ps = append(ps, extra...)
+	return nfqws2.Action{Func: fn, Params: ps}
+}
 
-	tlsMod := "rnd,dupsid"
-	if isKyber {
-		tlsMod = ""
+// fakeTLS builds a TCP fake action with the default TLS blob and optional mods.
+func fakeTLS(tlsMod string, extra ...nfqws2.Param) nfqws2.Action {
+	ps := make([]nfqws2.Param, 0, 2+len(extra))
+	ps = append(ps, nfqws2.P("blob", nfqws2.BlobDefaultTLS))
+	if tlsMod != "" {
+		ps = append(ps, nfqws2.P("tls_mod", tlsMod))
+	}
+	ps = append(ps, extra...)
+	return nfqws2.Action{Func: "fake", Params: ps}
+}
+
+// fakeQUIC builds a UDP fake action with the default QUIC blob.
+func fakeQUIC(extra ...nfqws2.Param) nfqws2.Action {
+	ps := make([]nfqws2.Param, 0, 1+len(extra))
+	ps = append(ps, nfqws2.P("blob", nfqws2.BlobDefaultQUIC))
+	ps = append(ps, extra...)
+	return nfqws2.Action{Func: "fake", Params: ps}
+}
+
+// badseqData is the Linux-safe badack fooling for a data-phase packet:
+// tcp_ack=-66000 plus the tcp_ts_up timestamp workaround (see mapping table).
+func badseqData() []nfqws2.Param {
+	return []nfqws2.Param{nfqws2.P("tcp_ack", "-66000"), nfqws2.Flag("tcp_ts_up")}
+}
+
+// ---- Curated imports (Yv series) ------------------------------------------
+
+// generateImportedStrategies translates the hand-tuned v1 "Yv" strategies to v2.
+// v1 foolings collapse into per-action params; a "fake,X" mode becomes an
+// ordered [fake, X] action pair. Bin-file patterns are dropped (blob refinement
+// is a later step), so every import is now unconditional.
+func generateImportedStrategies() []nfqws2.Strategy {
+	fakeMod := func(sni string, extra ...nfqws2.Param) nfqws2.Action {
+		return fakeTLS("rnd,dupsid,sni="+sni, extra...)
 	}
 
-	// 1. Generic Payload Strategy (One per bin)
-	strategies = append(strategies, nfqws.Strategy{
-		Mode: "fake,multisplit", Repeats: 3,
-		Fake:  nfqws.FakeOptions{TLS: binPath, TlsMod: tlsMod},
-		Split: nfqws.SplitOptions{Pos: "2,sld", SeqOvl: 620, Pattern: binPath},
-	})
+	return []nfqws2.Strategy{
+		// Yv01
+		tcpStrat(split("multisplit", "1", nfqws2.P("seqovl", "681"), nfqws2.P("ip_id", "zero"))),
+		// Yv02
+		tcpStrat(split("multisplit", "1,sniext+1", nfqws2.P("seqovl", "1"))),
+		// Yv03
+		tcpStrat(
+			fakeMod("ggpht.com", append([]nfqws2.Param{nfqws2.Flag("badsum")}, badseqData()...)...),
+			split("multisplit", "2,sld", nfqws2.P("seqovl", "620")),
+		),
+		// Yv04 (v1 split2 -> multisplit needs a pos)
+		tcpStrat(split("multisplit", "1", nfqws2.P("seqovl", "681"))),
+		// Yv05
+		tcpStrat(
+			nfqws2.Action{Func: "fake", Params: append([]nfqws2.Param{
+				nfqws2.P("blob", "0x0F0F0F0F"), nfqws2.Flag("badsum"),
+			}, badseqData()...)},
+			split("fakeddisorder", "10,midsld", nfqws2.P("seqovl", "336")),
+		),
+		// Yv06
+		tcpStrat(split("multidisorder", "7,sld+1",
+			nfqws2.P("ip_autottl", "2,2-12"), nfqws2.P("ip6_autottl", "2,2-12"),
+			nfqws2.P("tcp_ack", "-66000"), nfqws2.Flag("tcp_ts_up"),
+		)),
+		// Yv07
+		tcpStrat(split("multidisorder", "1,midsld,endhost-1",
+			nfqws2.P("repeats", "2"), nfqws2.Flag("tcp_md5"))),
+		// Yv08
+		tcpStrat(
+			fakeMod("www.google.com", append([]nfqws2.Param{nfqws2.P("repeats", "2")}, badseqData()...)...),
+			split("multisplit", "1,midsld"),
+		),
+		// Yv09
+		tcpStrat(split("multidisorder", "1,midsld",
+			nfqws2.P("repeats", "6"), nfqws2.P("tcp_ack", "-66000"), nfqws2.Flag("tcp_ts_up"))),
+		// Yv10
+		tcpStrat(split("multisplit", "1,2", nfqws2.P("seqovl", "4"))),
+		// Yv11
+		tcpStrat(split("multidisorder", "2,5,105,host+5,sld-1,endsld-5,endsld")),
+		// Yv12
+		tcpStrat(split("multidisorder", "1,midsld", nfqws2.P("repeats", "2"))),
+		// Yv13
+		tcpStrat(
+			fakeMod("fonts.google.com", append([]nfqws2.Param{nfqws2.P("repeats", "2")}, badseqData()...)...),
+			split("multidisorder", "1", nfqws2.P("seqovl", "681")),
+		),
+		// Yv14
+		tcpStrat(
+			fakeMod("fonts.google.com", badseqData()...),
+			split("multidisorder", "10,midsld", nfqws2.P("seqovl", "336")),
+		),
+		// Yv15
+		tcpStrat(
+			fakeMod("ggpht.com", append([]nfqws2.Param{nfqws2.Flag("badsum")}, badseqData()...)...),
+			split("multisplit", "2,sld", nfqws2.P("seqovl", "2108")),
+		),
+		// Yv16
+		tcpStrat(split("multisplit", "1,sniext+1",
+			nfqws2.P("seqovl", "1"), nfqws2.Flag("badsum"),
+			nfqws2.P("tcp_ack", "-66000"), nfqws2.Flag("tcp_ts_up"))),
+		// Yv17
+		tcpStrat(split("fakeddisorder", "method+2", nfqws2.Flag("tcp_md5"))),
+		// Yv18
+		tcpStrat(
+			fakeMod("www.google.com", nfqws2.Flag("tcp_ts_up"), nfqws2.P("ip_id", "zero")),
+			nfqws2.Action{Func: "hostfakesplit", Params: []nfqws2.Param{
+				nfqws2.P("host", "www.google.com"), nfqws2.P("altorder", "1"),
+			}},
+		),
+		// Yv19
+		tcpStrat(nfqws2.Action{Func: "hostfakesplit", Params: []nfqws2.Param{
+			nfqws2.P("host", "google.com"), nfqws2.Flag("tcp_ts_up"),
+		}}),
+		// Yv20
+		tcpStrat(
+			fakeTLS("", nfqws2.P("repeats", "6"), nfqws2.Flag("tcp_ts_up"), nfqws2.P("ip_id", "zero")),
+			split("fakedsplit", "1", nfqws2.P("pattern", "0x00")),
+		),
+		// Yv21
+		tcpStrat(
+			fakeTLS("", nfqws2.P("repeats", "8"), nfqws2.Flag("tcp_ts_up"), nfqws2.P("ip_id", "zero")),
+			split("multisplit", "1", nfqws2.P("seqovl", "681")),
+		),
+	}
+}
 
-	// 2. Host-Specific Strategies (One per Host in CommonHosts)
-	// This attempts to find the magic combination of "Valid Payload (Bin)" + "Valid Host Header"
+// ---- Procedural TCP --------------------------------------------------------
+
+// generateTCPStatic emits SNI-independent structural archetypes exactly once.
+func generateTCPStatic() []nfqws2.Strategy {
+	return []nfqws2.Strategy{
+		tcpStrat(split("multisplit", "1")),
+		tcpStrat(split("multisplit", "1,midsld")),
+		tcpStrat(split("multisplit", "sniext+1")),
+		tcpStrat(split("multidisorder", "1,midsld", nfqws2.P("repeats", "2"))),
+		tcpStrat(split("fakedsplit", "1", nfqws2.P("pattern", "0x00"))),
+		tcpStrat(split("fakeddisorder", "10,midsld", nfqws2.P("seqovl", "336"), nfqws2.P("pattern", "0x00"))),
+		tcpStrat(split("tcpseg", "1,midsld")),
+	}
+}
+
+// generateTCPPerTarget emits SNI/host-bearing archetypes, one per common target.
+func generateTCPPerTarget() []nfqws2.Strategy {
+	var out []nfqws2.Strategy
+	for _, sni := range evolution.CommonSNIs {
+		tlsMod := "rnd,dupsid,sni=" + sni
+		// fake + multisplit
+		out = append(out, tcpStrat(
+			fakeTLS(tlsMod, nfqws2.P("repeats", "2")),
+			split("multisplit", "2,sld", nfqws2.P("seqovl", "620")),
+		))
+		// fake + multidisorder
+		out = append(out, tcpStrat(
+			fakeTLS(tlsMod, nfqws2.P("repeats", "2")),
+			split("multidisorder", "1,midsld"),
+		))
+	}
+	// hostfakesplit: masked host header, one per common host.
 	for i, host := range evolution.CommonHosts {
 		sni := evolution.CommonSNIs[i%len(evolution.CommonSNIs)]
-		strategies = append(strategies, nfqws.Strategy{
-			Mode: "fake,hostfakesplit", Repeats: 2,
-			Fake:    nfqws.FakeOptions{TLS: binPath, TlsMod: "rnd,dupsid,sni=" + sni},
-			Split:   nfqws.SplitOptions{HostMod: "host=" + host},
-			Fooling: nfqws.FoolingSet{Ts: true},
-		})
+		out = append(out, tcpStrat(
+			fakeTLS("rnd,dupsid,sni="+sni, nfqws2.Flag("tcp_ts_up"), nfqws2.P("ip_id", "zero")),
+			nfqws2.Action{Func: "hostfakesplit", Params: []nfqws2.Param{nfqws2.P("host", host)}},
+		))
 	}
-
-	return strategies
+	return out
 }
 
-func generateUDPProcedural(binPath string) []nfqws.Strategy {
-	if strings.Contains(binPath, "quic") {
-		return []nfqws.Strategy{{
-			Mode: "fake", Repeats: 5,
-			Fooling: nfqws.FoolingSet{Md5Sig: true},
-			Fake:    nfqws.FakeOptions{Quic: binPath, TlsMod: "rnd"},
-		}}
+// generateHTTP emits plain-HTTP profile archetypes.
+func generateHTTP() []nfqws2.Strategy {
+	return []nfqws2.Strategy{
+		httpStrat(split("multisplit", "method+2")),
+		httpStrat(split("multidisorder", "method+2", nfqws2.P("repeats", "2"))),
+		httpStrat(nfqws2.Action{Func: "http_hostcase"}),
+		httpStrat(nfqws2.Action{Func: "http_domcase"}),
 	}
-	return nil
+}
+
+// ---- Procedural UDP --------------------------------------------------------
+
+// generateUDP emits the QUIC/UDP archetypes: quic-blob fakes and udplen.
+func generateUDP() []nfqws2.Strategy {
+	return []nfqws2.Strategy{
+		udpStrat(fakeQUIC(nfqws2.P("repeats", "4"))),
+		udpStrat(fakeQUIC(nfqws2.P("repeats", "6"), nfqws2.P("ip_ttl", "3"))),
+		udpStrat(nfqws2.Action{Func: "udplen", Params: []nfqws2.Param{nfqws2.P("inc", "2")}}),
+		udpStrat(
+			fakeQUIC(nfqws2.P("repeats", "5")),
+			nfqws2.Action{Func: "udplen", Params: []nfqws2.Param{nfqws2.P("inc", "2")}},
+		),
+	}
 }

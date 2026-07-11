@@ -19,7 +19,7 @@ func Cases() []types.ProviderDefinition {
 			Filters:          {{if $p.CIDRFile}}"--ipset=/app/targets/{{$p.Slug}}-cidr.txt"{{else}}""{{end}},
 			Targets: []types.Target{
 {{- range $t := $p.Targets}}
-				{URL: "{{$t.URL}}", Threshold: {{$t.Threshold}}, Proto: types.ProtoTCP, ID: "{{$t.ID}}"},
+				{URL: "{{$t.URL}}", Threshold: {{$t.Threshold}}, Proto: types.ProtoTCP, ID: "{{$t.ID}}"{{if $t.SNI}}, SNI: "{{$t.SNI}}"{{end}}},
 {{- end}}
 			},
 		},

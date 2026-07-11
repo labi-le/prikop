@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"prikop/internal/container"
 	"prikop/internal/model"
-	"prikop/internal/nfqws"
+	"prikop/internal/nfqws2"
 	"prikop/internal/scout"
 	"prikop/internal/verifier/availability"
 	"prikop/internal/verifier/checker"
@@ -122,8 +122,8 @@ func Run(cfg Config, log zerolog.Logger) {
 }
 
 var (
-	globalBestTCP *nfqws.Strategy
-	globalBestUDP *nfqws.Strategy
+	globalBestTCP *nfqws2.Strategy
+	globalBestUDP *nfqws2.Strategy
 	globalMu      sync.Mutex
 )
 
@@ -158,7 +158,7 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 			}
 
 			// Determine which global seed to use
-			var seed *nfqws.Strategy
+			var seed *nfqws2.Strategy
 			globalMu.Lock()
 			if p.Proto == "udp" {
 				seed = globalBestUDP
@@ -180,7 +180,7 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 				provLogger.Info().Str("winner", strategyArgs).Msg("Provider finished with a winning strategy")
 
 				// Try to cast back to Strategy to update global best
-				if s, ok := best.Config.(nfqws.Strategy); ok {
+				if s, ok := best.Config.(nfqws2.Strategy); ok {
 					globalMu.Lock()
 					if p.Proto == "udp" {
 						if globalBestUDP == nil {

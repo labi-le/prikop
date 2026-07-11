@@ -6,7 +6,7 @@ import (
 	"prikop/internal/evolution"
 	"prikop/internal/galaxy"
 	"prikop/internal/model"
-	"prikop/internal/nfqws"
+	"prikop/internal/nfqws2"
 	"prikop/internal/verifier/types"
 	"sort"
 	"strings"
@@ -18,9 +18,10 @@ import (
 
 const (
 	MinGensForIdealExit = 2
-	MaxComplexityTCP    = 3
-	MaxComplexityUDP    = 6
-	SimpleComplexity    = 1
+	// Complexity is nfqws2.Strategy.Complexity() = number of actions + params.
+	MaxComplexityTCP = 6
+	MaxComplexityUDP = 10
+	SimpleComplexity = 2
 )
 
 // Optimizer handles the evolutionary process for a specific phase
@@ -38,7 +39,7 @@ func (o *Optimizer) RunPhase(
 	p types.ProviderDefinition,
 	bins []string,
 	report model.ReconReport,
-	seed *nfqws.Strategy,
+	seed *nfqws2.Strategy,
 ) *model.ScoredStrategy {
 	proto := p.Proto
 	if proto == "" {
@@ -55,7 +56,7 @@ func (o *Optimizer) RunPhase(
 	// --- PRE-FLIGHT CHECK (Reuse Global Best) ---
 	if seed != nil {
 		phaseLog.Info().Str("seed", seed.String()).Msg("Testing seed strategy (Global Best)")
-		seedResults := o.executeBatch(ctx, []nfqws.Strategy{*seed}, p.Name, p.Filters, 0) // Test on all targets
+		seedResults := o.executeBatch(ctx, []nfqws2.Strategy{*seed}, p.Name, p.Filters, 0) // Test on all targets
 		if len(seedResults) > 0 {
 			res := seedResults[0]
 			successRate := float64(res.Result.SuccessCount) / float64(res.Result.TotalCount)
@@ -70,7 +71,7 @@ func (o *Optimizer) RunPhase(
 	population := galaxy.GenerateZeroGeneration(bins, report, proto)
 
 	// If seed didn't pass but is of same protocol, inject it as a strong parent
-	if seed != nil && ((proto == "tcp" && !strings.Contains(seed.Mode, "udp")) || (proto == "udp" && strings.Contains(seed.Mode, "udp"))) {
+	if seed != nil && ((proto == "tcp" && !seed.IsUDP()) || (proto == "udp" && seed.IsUDP())) {
 		population = append(population, *seed)
 	}
 
@@ -100,15 +101,15 @@ func (o *Optimizer) RunPhase(
 		}
 
 		sort.Slice(results, func(i, j int) bool {
-			s1, _ := results[i].Config.(nfqws.Strategy)
-			s2, _ := results[j].Config.(nfqws.Strategy)
+			s1, _ := results[i].Config.(nfqws2.Strategy)
+			s2, _ := results[j].Config.(nfqws2.Strategy)
 			return evolution.CalculateScore(results[i].Result, results[i].Complexity, s1) >
 				evolution.CalculateScore(results[j].Result, results[j].Complexity, s2)
 		})
 
 		if len(results) > 0 {
 			bestGen := results[0]
-			sBest, _ := bestGen.Config.(nfqws.Strategy)
+			sBest, _ := bestGen.Config.(nfqws2.Strategy)
 			score := evolution.CalculateScore(bestGen.Result, bestGen.Complexity, sBest)
 
 			if bestGen.Result.SuccessCount > 0 {
@@ -116,7 +117,7 @@ func (o *Optimizer) RunPhase(
 					globalBest = &bestGen
 					o.logNewBest(genLog, globalBest)
 				} else {
-					sGlobal, _ := globalBest.Config.(nfqws.Strategy)
+					sGlobal, _ := globalBest.Config.(nfqws2.Strategy)
 					globalScore := evolution.CalculateScore(globalBest.Result, globalBest.Complexity, sGlobal)
 
 					if score > globalScore {
@@ -131,8 +132,8 @@ func (o *Optimizer) RunPhase(
 			successRate := float64(globalBest.Result.SuccessCount) / float64(globalBest.Result.TotalCount)
 
 			if successRate >= threshold {
-				sBest, _ := globalBest.Config.(nfqws.Strategy)
-				isMasking := strings.Contains(sBest.Mode, "fake") || strings.Contains(sBest.Mode, "hostfake")
+				sBest, _ := globalBest.Config.(nfqws2.Strategy)
+				isMasking := sBest.HasFunc("fake")
 				maxComp := MaxComplexityTCP
 				if proto == "udp" {
 					maxComp = MaxComplexityUDP
@@ -171,7 +172,7 @@ func (o *Optimizer) logNewBest(log zerolog.Logger, best *model.ScoredStrategy) {
 	}
 }
 
-func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, group string, filters string, maxTargets int) []model.ScoredStrategy {
+func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws2.Strategy, group string, filters string, maxTargets int) []model.ScoredStrategy {
 	var wg sync.WaitGroup
 	results := make([]model.ScoredStrategy, len(strats))
 	filterArgs := strings.Fields(filters)
@@ -184,7 +185,7 @@ func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, g
 
 	for i, s := range strats {
 		wg.Add(1)
-		go func(idx int, strat nfqws.Strategy) {
+		go func(idx int, strat nfqws2.Strategy) {
 			defer wg.Done()
 
 			if ctx.Err() != nil {
@@ -208,7 +209,7 @@ func (o *Optimizer) executeBatch(ctx context.Context, strats []nfqws.Strategy, g
 				RawArgs:    strat.String(),
 				Duration:   duration,
 				Result:     res,
-				Complexity: strat.Repeats,
+				Complexity: strat.Complexity(),
 			}
 
 			if err != nil {

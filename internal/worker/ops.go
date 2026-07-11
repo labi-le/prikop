@@ -30,17 +30,22 @@ func SetupIptables(group string) error {
 
 // Cleanup removes processes and flushes firewall
 func Cleanup() {
-	_ = exec.Command("pkill", "-9", "nfqws").Run()
+	_ = exec.Command("pkill", "-9", "nfqws2").Run()
 	_ = exec.Command("iptables", "-F", "OUTPUT").Run()
 	_ = exec.Command("iptables", "-F", "INPUT").Run()
 }
 
-// StartNFQWS executes the nfqws binary directly
+// StartNFQWS executes the nfqws2 binary directly.
 func StartNFQWS(args []string) (*exec.Cmd, *bytes.Buffer) {
-	// Prepend strict args
-	finalArgs := append([]string{"--qnum=" + model.QueueNum}, args...)
+	// Prepend queue number and the lua desync library. nfqws2 has no built-in
+	// desync engine: strategies are lua functions loaded via --lua-init.
+	finalArgs := append([]string{
+		"--qnum=" + model.QueueNum,
+		"--lua-init=@/app/lua/zapret-lib.lua",
+		"--lua-init=@/app/lua/zapret-antidpi.lua",
+	}, args...)
 
-	cmd := exec.Command("/usr/bin/nfqws", finalArgs...)
+	cmd := exec.Command("/usr/bin/nfqws2", finalArgs...)
 
 	var out bytes.Buffer
 	cmd.Stdout = &out

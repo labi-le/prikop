@@ -2,19 +2,25 @@ package evolution
 
 import (
 	"fmt"
-	"math/rand"
-	"prikop/internal/model"
+	"math/rand/v2"
+	"sort"
+	"strconv"
 	"strings"
 
-	"prikop/internal/nfqws"
+	"prikop/internal/model"
+	"prikop/internal/nfqws2"
 )
 
 const (
-	ProbResetSplit    = 0.4
-	ProbResetFake     = 0.7
+	// SmartMutate group-1 (signature match) branch thresholds
+	ProbResetSplit = 0.4
+	ProbResetFake  = 0.7
+
+	// group-2 (timeout / loss / inconclusive) branch thresholds
 	ProbTimeoutRepeat = 0.4
 	ProbTimeoutMode   = 0.7
 
+	// default/random op weights (cumulative, out of 100)
 	ProbMutateSplit   = 20
 	ProbMutateFake    = 35
 	ProbMutateMode    = 50
@@ -22,43 +28,44 @@ const (
 	ProbMutateTamper  = 80
 	ProbMutateTTL     = 90
 
-	ProbSecondaryMode   = 0.3
-	ProbTamperEnabled   = 0.5
-	ProbTamperHostCase  = 0.3
-	ProbTamperMethodEol = 0.5
-	ProbTamperDomCase   = 0.7
-	ProbTamperHostSpell = 0.9
-
+	// split heuristics
 	ProbSplitMulti  = 0.4
 	ProbSplitDouble = 0.3
 	ProbSplitSeqOvl = 0.6
-	ProbSplitBin    = 0.3
 
-	ProbWSSFlip       = 0.4
-	ProbGlobalRepeats = 0.3
-	ProbGlobalProto   = 0.5
-	ProbGlobalWSS     = 0.7
+	// fake heuristics
+	ProbFakeTLSMod = 0.6
+	ProbFakeSNI    = 0.2
 
-	ProbTTLAuto  = 0.6
-	ProbTTLFixed = 0.9
-
+	// fooling flip probabilities
 	ProbFoolingFlip  = 0.3
 	ProbFoolingRisky = 0.05
 
-	ProbFakeTCPTLS     = 0.8
-	ProbFakeTCPSynData = 0.9
-	ProbFakeTCPSNI     = 0.2
-	ProbFakeQUIC       = 0.5
+	// global/misc
+	ProbGlobalRepeats = 0.3
+	ProbGlobalWSS     = 0.7
+
+	// TTL heuristics
+	ProbTTLAuto  = 0.6
+	ProbTTLFixed = 0.9
+
+	// wssize toggle-off probability when one already exists
+	ProbWSSDrop = 0.4
 
 	MaxRepeatsTCP     = 6
 	MaxRepeatsUDP     = 10
 	MinRepeats        = 1
 	MaxRepeatsOverall = 10
+
+	// Canonical badseq/badack fooling values (v1 badseq -> v2 tcp_seq/tcp_ack).
+	BadSeqValue = "-10000" // tcp_seq, for SYN-time actions
+	BadAckValue = "-66000" // tcp_ack, for data actions (+ tcp_ts_up on Linux)
 )
 
 var (
 	magicSeqOvls = []int{336, 620, 109, 652, 1, 133, 500, 32, 2}
-	CommonSNIs   = []string{
+	// CommonSNIs / CommonHosts are consumed by package galaxy too — keep exported.
+	CommonSNIs = []string{
 		"www.gosuslugi.ru", "sberbank.ru", "sun6-21.userapi.com",
 		"ya.ru", "eh.vk.com", "support.mcs.mail.ru", "api.ok.ru",
 		"00.img.avito.st", "goya.rutube.ru", "mapgl.2gis.com", "www.google.com", "ggpht.com",
@@ -70,7 +77,38 @@ var (
 		"00.img.avito.st", "goya.rutube.ru", "mapgl.2gis.com", "api.ok.ru",
 	}
 	tamperSpells = []string{"HOst", "hoSt", "hOst", "host"}
-	wssSizes     = []string{"1:6", "1:8", "1:10", "500", "800", "1400", "2048:2"}
+
+	// Blob pools: only default named blobs or 0xHEX literals are allowed (no
+	// /app/fake/*.bin file paths yet, per the migration contract).
+	tlsBlobs = []string{
+		nfqws2.BlobDefaultTLS,
+		"0x1603010200010000", "0x160301", "0x16030100",
+	}
+	quicBlobs = []string{
+		nfqws2.BlobDefaultQUIC,
+		"0xc00000000108", "0xcd0000000108",
+	}
+	tlsMods = []string{"rnd", "rndsni", "rnd,dupsid", "dupsid", "padencap", ""}
+
+	// wsize/scale pairs for the wssize action (v1 "1:6" -> wsize=1:scale=6).
+	wsizePairs = [][2]string{
+		{"1", "6"}, {"1", "8"}, {"1", "10"}, {"512", ""}, {"1400", ""}, {"2048", "2"},
+	}
+
+	methodEols = []string{"cr", "lf", "crlf", "lfcr"}
+
+	httpTamperFuncs = []string{"http_hostcase", "http_domcase", "http_methodeol", "http_unixeol"}
+
+	// IPv6-only extension-header foolings — dropped (prikop targets the IPv4 path).
+	ipv6OnlyParams = []string{
+		"ip6_hopbyhop", "ip6_hopbyhop2", "ip6_destopt", "ip6_destopt2",
+		"ip6_routing", "ip6_ah",
+	}
+	// TCP-only foolings, meaningless on a UDP/QUIC profile.
+	tcpOnlyParams = []string{
+		"tcp_md5", "tcp_seq", "tcp_ack", "tcp_ts", "tcp_ts_up",
+		"tcp_flags_set", "tcp_flags_unset",
+	}
 )
 
 type Mutator struct {
@@ -82,82 +120,83 @@ func NewMutator(bins []string, proto string) *Mutator {
 	return &Mutator{AvailableBins: bins, Proto: proto}
 }
 
-func (m *Mutator) Mutate(s *nfqws.Strategy) {
+func (m *Mutator) Mutate(s *nfqws2.Strategy) {
 	m.SmartMutate(s, model.ReasonNone)
 }
 
-func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
+func (m *Mutator) SmartMutate(s *nfqws2.Strategy, feedback model.FailureReason) {
 	r := rand.Float64()
 	m.sanitize(s)
 
 	switch feedback {
-	// === ГРУППА 1: ЖЕСТКАЯ БЛОКИРОВКА (Signature Match) ===
-	// DPI распознал протокол и разорвал/подменил соединение.
-	// Решение: Агрессивное изменение Fake или Split для скрытия сигнатуры.
+	// === GROUP 1: HARD BLOCK (signature match) ===
+	// DPI recognised the protocol and reset/spoofed the connection.
+	// Response: aggressively reshape the fake/split to hide the signature.
 	case model.ReasonReset,
-		model.ReasonTLSNotTLS,           // Вернулась заглушка
-		model.ReasonTLSOversized,        // Склейка пакетов DPI
-		model.ReasonTLSRecordOverflow,   // DPI инжектировали данные или повредил запись
-		model.ReasonTLSUnrecognizedName: // SNI mismatch (спуфинг от DPI)
+		model.ReasonTLSNotTLS,
+		model.ReasonTLSOversized,
+		model.ReasonTLSRecordOverflow,
+		model.ReasonTLSUnrecognizedName:
 
 		if r < ProbResetSplit {
-			m.mutateSplit(s) // Меняем точку разрыва (смещаем SNI)
+			m.mutateSplit(s) // shift the break point (around SNI/host)
 		} else if r < ProbResetFake {
-			m.mutateFake(s) // Меняем Fake (сигнатуру мусора)
+			m.mutateFake(s) // swap the fake payload signature
 		} else {
-			m.mutateTamper(s) // Включаем tamper (изменение заголовков)
+			m.mutateTamper(s) // toggle a tamper-style http func
 		}
 
-	// === ГРУППА 2: ПОТЕРЯ ПАКЕТОВ / ТАЙМАУТЫ / НЕОПРЕДЕЛЕННОСТЬ ===
-	// Пакеты не доходят, дропаются тихо или результат неоднозначен.
-	// Решение: Изменение параметров доставки или упрощение.
+	// === GROUP 2: PACKET LOSS / TIMEOUTS / INCONCLUSIVE ===
+	// Packets don't arrive or the verdict is ambiguous.
+	// Response: change delivery params or simplify.
 	case model.ReasonTimeout,
 		model.ReasonSkip,
 		model.ReasonTLSHandshake,
 		model.ReasonTLSInternal:
 
 		if feedback == model.ReasonSkip && r < 0.3 {
-			m.mutateSimplify(s) // Если "skip", возможно стратегия слишком ломает пакеты
+			m.mutateSimplify(s)
 		} else if r < ProbTimeoutRepeat {
-			m.mutateRepeats(s) // Больше повторов
+			m.mutateRepeats(s)
 		} else if r < ProbTimeoutMode {
-			m.mutateMode(s) // Смена режима доставки (fake -> split)
+			m.mutateMode(s)
 		} else {
-			m.mutateTTL(s) // Проблема в TTL
+			m.mutateTTL(s)
 		}
 
-	// === ГРУППА 3: MITM / ВМЕШАТЕЛЬСТВО (Intervention) ===
-	// DPI пытается вклиниться в рукопожатие, понизить версию или подменить сертификат.
-	// Решение: Ломать синхронизацию (SynAck), Disorder (путать сборщик DPI), WSS.
+	// === GROUP 3: MITM / INTERVENTION ===
+	// DPI wedges into the handshake, downgrades, or spoofs the cert.
+	// Response: break sync (synack_split), disorder, or force server split (wssize).
 	case model.ReasonTLSALPN,
 		model.ReasonTLSVersion,
-		model.ReasonTLSCipherSuite, // <--- MITM: Сервер выбрал шифр, который клиент не предлагал
+		model.ReasonTLSCipherSuite,
 		model.ReasonTLSDowngrade,
 		model.ReasonTLSBadSignature,
-		model.ReasonTLSIllegalParam, // MITM: повреждение полей handshake
+		model.ReasonTLSIllegalParam,
 		model.ReasonTLSSessionID:
 
-		if !strings.Contains(s.Mode, "synack") && r < 0.4 {
-			s.Mode += ",synack" // Ломаем начало соединения
+		if !s.HasFunc("synack_split") && r < 0.4 {
+			// prepend the synack_split phase-0 action
+			s.Actions = append([]nfqws2.Action{{Func: "synack_split"}}, s.Actions...)
 		} else if r < 0.7 {
-			m.mutateWSS(s) // Форсируем сплит ответа сервера
+			m.mutateWSS(s) // force server-side fragmentation
 		} else {
-			// Disorder эффективен против MITM, так как DPI не может собрать поток
-			if !strings.Contains(s.Mode, "disorder") {
-				s.Mode = strings.ReplaceAll(s.Mode, "split", "disorder")
-				if !strings.Contains(s.Mode, "disorder") {
-					s.Mode = "multidisorder"
-				}
+			// disorder is effective against MITM: DPI can't reassemble.
+			if !s.HasFunc("disorder") {
+				m.toDisorder(s)
 				m.mutateSplit(s)
 			} else {
-				// Если уже disorder, меняем параметры перекрытия
-				s.Split.SeqOvl = magicSeqOvls[rand.Intn(len(magicSeqOvls))]
+				// already disorder: reroll the overlap on the disorder action
+				for i := range s.Actions {
+					if strings.Contains(s.Actions[i].Func, "disorder") {
+						s.Actions[i].SetParam("seqovl", strconv.Itoa(magicSeqOvls[rand.IntN(len(magicSeqOvls))]))
+					}
+				}
 			}
 		}
 
-	// === ГРУППА 4: ПОВРЕЖДЕНИЕ ДАННЫХ (Corruption) ===
-	// Мы сломали пакет так, что сервер или клиент не могут его прочитать.
-	// Решение: УПРОЩЕНИЕ (Simplification). Откат агрессивных методов.
+	// === GROUP 4: DATA CORRUPTION ===
+	// We broke the packet so badly the peer can't read it. Roll back aggression.
 	case model.ReasonTLSBadMAC,
 		model.ReasonTLSDecrypt,
 		model.ReasonTLSDecode,
@@ -165,16 +204,16 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 
 		m.mutateSimplify(s)
 
-	// === ГРУППА 5: ШЕЙПИНГ ===
+	// === GROUP 5: SHAPING ===
 	case model.ReasonThrottle:
-		m.mutateWSS(s) // Меняем размер окна, чтобы сбить шейпер
+		m.mutateWSS(s)
 		if r < 0.5 {
 			m.mutateSplit(s)
 		}
 
 	// === DEFAULT / RANDOM ===
 	default:
-		choice := rand.Intn(100)
+		choice := rand.IntN(100)
 		switch {
 		case choice < ProbMutateSplit:
 			m.mutateSplit(s)
@@ -182,7 +221,7 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 			m.mutateFake(s)
 		case choice < ProbMutateMode:
 			m.mutateMode(s)
-			if strings.Contains(s.Mode, "fake") {
+			if s.HasFunc("fake") {
 				m.mutateFake(s)
 			}
 		case choice < ProbMutateFooling:
@@ -199,395 +238,586 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 	m.sanitize(s)
 }
 
-// mutateSimplify уменьшает агрессивность стратегии, если она вызывает ошибки протокола
-func (m *Mutator) mutateSimplify(s *nfqws.Strategy) {
-	// 1. Отключаем BadSum/BadSeq (частая причина поломок за NAT)
-	s.Fooling.BadSum = false
-	s.Fooling.BadSeq = false
+// ---- operators ---------------------------------------------------------------
 
-	// 2. Disorder -> Split (Disorder часто ломает стейт TLS 1.3)
-	if strings.Contains(s.Mode, "disorder") {
-		s.Mode = strings.ReplaceAll(s.Mode, "multidisorder", "multisplit")
-		s.Mode = strings.ReplaceAll(s.Mode, "fakeddisorder", "fakedsplit")
-		s.Mode = strings.ReplaceAll(s.Mode, "disorder", "split")
-	}
-
-	// 3. Уменьшаем перекрытие (SeqOvl), если оно есть
-	if s.Split.SeqOvl > 0 {
-		s.Split.SeqOvl = 0 // Выключаем перекрытие, так как оно может портить данные
-	}
-
-	// 4. Сбрасываем repeats до минимума, чтобы снизить шум
-	s.Repeats = 1
-
-	// 5. Если есть фейк, пробуем сделать его стандартным
-	if strings.Contains(s.Mode, "fake") {
-		s.Fake.TlsMod = "" // Убираем модификаторы фейка
+// mutateSimplify reduces aggressiveness when the strategy corrupts the stream.
+func (m *Mutator) mutateSimplify(s *nfqws2.Strategy) {
+	for i := range s.Actions {
+		a := &s.Actions[i]
+		// 1. drop NAT-fragile / corrupting foolings
+		a.DelParam("badsum")
+		a.DelParam("tcp_seq")
+		a.DelParam("tcp_ack")
+		a.DelParam("tcp_ts_up")
+		// 2. drop overlap (SeqOvl damages payload)
+		a.DelParam("seqovl")
+		a.DelParam("seqovl_pattern")
+		// 3. drop fake modifiers
+		a.DelParam("tls_mod")
+		// 4. reset repeats to the minimum
+		a.DelParam("repeats")
+		// 5. disorder -> split (disorder often breaks TLS 1.3 state)
+		a.Func = simplifyFunc(a.Func)
 	}
 }
 
-func (m *Mutator) sanitize(s *nfqws.Strategy) {
-	modes := strings.Split(s.Mode, ",")
-	var p0, p1, p2 []string
-
-	for _, raw := range modes {
-		mode := strings.TrimSpace(raw)
-		if mode == "" {
-			continue
-		}
-
-		switch mode {
-		case "syndata", "synack":
-			p0 = append(p0, mode)
-		case "hopbyhop", "destopt", "ipfrag1":
-			// Explicitly ignore IPv6 specific modes
-			continue
-		case "fake", "fakeknown", "rst", "rstack":
-			p1 = append(p1, mode)
-		case "multisplit", "multidisorder", "fakedsplit", "fakeddisorder",
-			"hostfakesplit", "ipfrag2", "udplen", "tamper":
-			p2 = append(p2, mode)
-		default:
-			p2 = append(p2, mode)
-		}
+func (m *Mutator) mutateSplit(s *nfqws2.Strategy) {
+	idx := m.splitIdx(s)
+	if idx < 0 {
+		s.Actions = append(s.Actions, nfqws2.Action{Func: "multisplit"})
+		idx = len(s.Actions) - 1
 	}
+	a := &s.Actions[idx]
 
-	var finalModes []string
-	if len(p0) > 0 {
-		finalModes = append(finalModes, p0[0])
-	}
-	if len(p1) > 0 {
-		finalModes = append(finalModes, p1[0])
-	}
-	if len(p2) > 0 {
-		finalModes = append(finalModes, p2[0])
-	}
-
-	s.Mode = strings.Join(finalModes, ",")
-
-	isFake := strings.Contains(s.Mode, "fake")
-	isSplit := strings.Contains(s.Mode, "split") || strings.Contains(s.Mode, "disorder")
-	isHostFake := strings.Contains(s.Mode, "hostfakesplit")
-	isTamper := strings.Contains(s.Mode, "tamper")
-	isSyndata := strings.Contains(s.Mode, "syndata")
-	isUdpLen := strings.Contains(s.Mode, "udplen")
-
-	if !isFake && !isSyndata {
-		s.Fake = nfqws.FakeOptions{}
-	} else {
-		isClientHello := strings.Contains(s.Fake.TLS, "clienthello")
-		isDTLS := strings.Contains(s.Fake.TLS, "dtls")
-		isKyber := strings.Contains(s.Fake.TLS, "kyber")
-
-		if s.Fake.TlsMod != "" {
-			if !isClientHello || isDTLS || isKyber {
-				s.Fake.TlsMod = ""
-			}
-		}
-
-		if s.Fake.TLS == "" && s.Fake.Quic == "" && s.Fake.UnknownUdp == "" && s.Fake.SynData == "" {
-			m.mutateFake(s)
-		}
-
-		if m.Proto == "udp" {
-			s.Fake.TLS = ""
-		} else {
-			s.Fake.Quic = ""
-			s.Fake.UnknownUdp = ""
-		}
-	}
-
-	if !isSplit && !isHostFake {
-		s.Split = nfqws.SplitOptions{}
-	}
-	if !isTamper {
-		s.Tamper = nfqws.TamperOptions{}
-	}
-	if !isUdpLen {
-		s.UdpLen = nfqws.UdpLenOptions{}
-	}
-	if isHostFake {
-		if s.Split.HostMod == "" {
-			s.Split.HostMod = "host=" + CommonHosts[rand.Intn(len(CommonHosts))]
-		}
-	}
-
-	if s.Repeats < MinRepeats {
-		s.Repeats = MinRepeats
-	}
-	if s.Repeats > MaxRepeatsOverall {
-		s.Repeats = MaxRepeatsOverall
-	}
-
-	s.Fooling.HopByHop = false
-	s.Fooling.HopByHop2 = false
-}
-
-func (m *Mutator) mutateMode(s *nfqws.Strategy) {
-	var baseModes []string
-	var secondaryModes []string
-
-	if m.Proto == "tcp" {
-		baseModes = []string{
-			"fake", "multisplit", "multidisorder",
-			"hostfakesplit", "syndata",
-		}
-		secondaryModes = []string{"tamper", "rst"}
-	} else {
-		baseModes = []string{"fake", "multisplit", "udplen", "ipfrag2"}
-		secondaryModes = []string{"udplen", "ipfrag2"}
-	}
-
-	newMode := baseModes[rand.Intn(len(baseModes))]
-
-	if rand.Float64() < ProbSecondaryMode && len(secondaryModes) > 0 {
-		sec := secondaryModes[rand.Intn(len(secondaryModes))]
-		if !strings.Contains(newMode, sec) {
-			newMode += "," + sec
-		}
-	}
-	s.Mode = newMode
-}
-
-func (m *Mutator) mutateTamper(s *nfqws.Strategy) {
-	isP2 := strings.Contains(s.Mode, "split") ||
-		strings.Contains(s.Mode, "disorder") ||
-		strings.Contains(s.Mode, "ipfrag2") ||
-		strings.Contains(s.Mode, "udplen")
-
-	if isP2 {
+	if a.Func == "hostfakesplit" {
+		a.SetParam("host", CommonHosts[rand.IntN(len(CommonHosts))])
+		a.DelParam("seqovl")
 		return
 	}
 
-	if !strings.Contains(s.Mode, "tamper") {
-		if rand.Float64() < ProbTamperEnabled {
-			if s.Mode == "" {
-				s.Mode = "tamper"
-			} else {
-				s.Mode += ",tamper"
-			}
-		} else {
-			return
-		}
-	}
+	a.SetParam("pos", m.genSplitPos(a.Func))
 
-	r := rand.Float64()
-	if r < ProbTamperHostCase {
-		s.Tamper.HostCase = !s.Tamper.HostCase
-	} else if r < ProbTamperMethodEol {
-		s.Tamper.MethodEol = !s.Tamper.MethodEol
-	} else if r < ProbTamperDomCase {
-		s.Tamper.DomCase = !s.Tamper.DomCase
-	} else if r < ProbTamperHostSpell {
-		s.Tamper.HostSpell = tamperSpells[rand.Intn(len(tamperSpells))]
+	if rand.Float64() < ProbSplitSeqOvl {
+		a.SetParam("seqovl", strconv.Itoa(magicSeqOvls[rand.IntN(len(magicSeqOvls))]))
 	} else {
-		s.Tamper.HostNoSpace = !s.Tamper.HostNoSpace
+		a.SetParam("seqovl", strconv.Itoa(1+rand.IntN(5)))
 	}
 }
 
-func (m *Mutator) mutateSplit(s *nfqws.Strategy) {
-	if strings.Contains(s.Mode, "hostfakesplit") {
-		mod := CommonHosts[rand.Intn(len(CommonHosts))]
-		s.Split.HostMod = "host=" + mod
-		s.Split.SeqOvl = 0
-		return
-	}
-
-	// ЭВРИСТИКА: Увеличиваем вероятность позиций, связанных с SNI и Host.
-	// DPI часто ломается именно на разрыве заголовков.
+// genSplitPos mirrors the v1 marker heuristic, biased toward SNI/host breaks.
+func (m *Mutator) genSplitPos(fn string) string {
 	markers := []string{
-		"midsld", "sniext", "endsld", // Высокий приоритет (разрыв внутри домена/SNI)
-		"method", "host", // Средний приоритет
-		"2", "3", // Низкий приоритет (магические числа)
+		"midsld", "sniext", "endsld", // high priority (break inside domain/SNI)
+		"method", "host", // medium priority
+		"2", "3", // low priority (magic numbers)
 	}
 
-	genPos := func() string {
-		marker := markers[rand.Intn(len(markers))]
-
-		// Для простых числовых маркеров возвращаем как есть
-		if len(marker) < 3 {
+	gen := func() string {
+		marker := markers[rand.IntN(len(markers))]
+		if len(marker) < 3 { // bare numeric marker
 			return marker
 		}
-
-		// Добавляем микро-смещение, чтобы "гулять" вокруг маркера (например, sniext+1)
-		offset := rand.Intn(5) - 2 // от -2 до +2
+		offset := rand.IntN(5) - 2 // -2..+2
 		if offset == 0 {
 			return marker
 		}
 		if offset > 0 {
 			return fmt.Sprintf("%s+%d", marker, offset)
 		}
-		return fmt.Sprintf("%s%d", marker, offset) // offset отрицательный, знак уже есть
+		return fmt.Sprintf("%s%d", marker, offset) // negative sign already present
 	}
 
-	// Для multisplit/multidisorder часто выгодно разорвать пакет в самом начале (1) и в середине (SNI)
-	if (strings.Contains(s.Mode, "multisplit") || strings.Contains(s.Mode, "multidisorder")) && rand.Float64() < ProbSplitMulti {
-		s.Split.Pos = "1," + genPos()
-	} else if rand.Float64() < ProbSplitDouble {
-		// Двойной разрыв в случайных местах
-		s.Split.Pos = genPos() + "," + genPos()
-	} else {
-		s.Split.Pos = genPos()
-	}
-
-	// SeqOvl - важный параметр для disorder. Малые значения часто работают лучше.
-	if rand.Float64() < ProbSplitSeqOvl {
-		s.Split.SeqOvl = magicSeqOvls[rand.Intn(len(magicSeqOvls))]
-	} else {
-		s.Split.SeqOvl = 1 + rand.Intn(5)
-	}
-
-	if rand.Float64() < ProbSplitBin {
-		s.Split.Pattern = m.AvailableBins[rand.Intn(len(m.AvailableBins))]
+	isMulti := fn == "multisplit" || fn == "multidisorder"
+	switch {
+	case isMulti && rand.Float64() < ProbSplitMulti:
+		return "1," + gen()
+	case rand.Float64() < ProbSplitDouble:
+		return gen() + "," + gen()
+	default:
+		return gen()
 	}
 }
 
-func (m *Mutator) mutateRepeats(s *nfqws.Strategy) {
-	delta := rand.Intn(3) - 1
-	s.Repeats += delta
-	maxRepeats := MaxRepeatsTCP
-	if m.Proto == "udp" {
-		maxRepeats = MaxRepeatsUDP
+func (m *Mutator) mutateFake(s *nfqws2.Strategy) {
+	idx := findFunc(s, "fake")
+	if idx < 0 {
+		s.Actions = append(s.Actions, nfqws2.Action{Func: "fake"})
+		idx = len(s.Actions) - 1
 	}
-	if s.Repeats > maxRepeats {
-		s.Repeats = maxRepeats
-	}
-	if s.Repeats < MinRepeats {
-		s.Repeats = MinRepeats
-	}
-}
+	a := &s.Actions[idx]
+	a.SetParam("blob", m.pickBlob())
 
-func (m *Mutator) mutateWSS(s *nfqws.Strategy) {
-	if rand.Float64() < ProbWSSFlip {
-		s.WSS.Enabled = !s.WSS.Enabled
-	}
-	if s.WSS.Enabled {
-		s.WSS.Value = wssSizes[rand.Intn(len(wssSizes))]
-	}
-}
-
-func (m *Mutator) mutateGlobal(s *nfqws.Strategy) {
-	r := rand.Float64()
-	if r < ProbGlobalRepeats {
-		m.mutateRepeats(s)
-	} else if r < ProbGlobalProto {
-		if m.Proto == "udp" {
-			s.AnyProtocol = !s.AnyProtocol
-			if s.AnyProtocol {
-				s.Cutoff = "d2"
+	if m.Proto == "tcp" && rand.Float64() < ProbFakeTLSMod {
+		if rand.Float64() < ProbFakeSNI {
+			a.SetParam("tls_mod", "sni="+CommonSNIs[rand.IntN(len(CommonSNIs))])
+		} else {
+			mod := tlsMods[rand.IntN(len(tlsMods))]
+			if mod == "" {
+				a.DelParam("tls_mod")
 			} else {
-				s.Cutoff = ""
+				a.SetParam("tls_mod", mod)
 			}
 		}
-	} else if r < ProbGlobalWSS {
-		m.mutateWSS(s)
 	} else {
+		a.DelParam("tls_mod")
+	}
+}
+
+// mutateMode switches the primary desync function (fake <-> split family).
+func (m *Mutator) mutateMode(s *nfqws2.Strategy) {
+	var bases []string
+	if m.Proto == "tcp" {
+		bases = []string{"fake", "multisplit", "multidisorder", "fakedsplit", "fakeddisorder", "hostfakesplit"}
+	} else {
+		bases = []string{"fake", "multisplit", "udplen"}
+	}
+	newFunc := bases[rand.IntN(len(bases))]
+
+	idx := m.primaryIdx(s)
+	if idx < 0 {
+		s.Actions = append(s.Actions, nfqws2.Action{Func: newFunc})
+		return
+	}
+	// Switch func and clear now-irrelevant params; sanitize re-adds blob/pos.
+	s.Actions[idx].Func = newFunc
+	s.Actions[idx].Params = nil
+}
+
+func (m *Mutator) mutateFooling(s *nfqws2.Strategy) {
+	idx := m.primaryIdx(s)
+	if idx < 0 {
+		return
+	}
+	a := &s.Actions[idx]
+
+	flipFlag := func(key string, prob float64) {
+		if rand.Float64() >= prob {
+			return
+		}
+		if _, ok := a.Param(key); ok {
+			a.DelParam(key)
+		} else {
+			a.SetParam(key, "")
+		}
+	}
+
+	if m.Proto == "tcp" {
+		flipFlag("tcp_md5", ProbFoolingFlip)
+		// badsum/badseq are NAT-fragile: heavily biased OFF via the score penalty.
+		flipFlag("badsum", ProbFoolingRisky)
+		if rand.Float64() < ProbFoolingRisky {
+			if hasBadSeq(a) {
+				clearBadSeq(a)
+			} else {
+				setBadSeq(a)
+			}
+		}
+		// datanoack -> tcp_flags_unset=ack
+		if rand.Float64() < ProbFoolingFlip {
+			if _, ok := a.Param("tcp_flags_unset"); ok {
+				a.DelParam("tcp_flags_unset")
+			} else {
+				a.SetParam("tcp_flags_unset", "ack")
+			}
+		}
+	} else {
+		flipFlag("badsum", ProbFoolingRisky)
+	}
+}
+
+// mutateTamper toggles a tamper-style http_* function (TCP/HTTP only).
+func (m *Mutator) mutateTamper(s *nfqws2.Strategy) {
+	if m.Proto != "tcp" {
+		return
+	}
+	fn := httpTamperFuncs[rand.IntN(len(httpTamperFuncs))]
+	if i := findFunc(s, fn); i >= 0 {
+		s.Actions = append(s.Actions[:i], s.Actions[i+1:]...)
+		return
+	}
+	a := nfqws2.Action{Func: fn}
+	switch fn {
+	case "http_hostcase":
+		a.SetParam("spell", tamperSpells[rand.IntN(len(tamperSpells))])
+	case "http_methodeol":
+		if rand.Float64() < 0.5 {
+			a.SetParam("method", methodEols[rand.IntN(len(methodEols))])
+		}
+	}
+	s.Actions = append(s.Actions, a)
+}
+
+func (m *Mutator) mutateTTL(s *nfqws2.Strategy) {
+	idx := m.primaryIdx(s)
+	if idx < 0 {
+		return
+	}
+	a := &s.Actions[idx]
+	a.DelParam("ip_ttl")
+	a.DelParam("ip6_ttl")
+	a.DelParam("ip_autottl")
+	a.DelParam("ip6_autottl")
+
+	r := rand.Float64()
+	if r < ProbTTLAuto {
+		delta := -(1 + rand.IntN(3)) // -1..-3
+		val := fmt.Sprintf("%d,3-20", delta)
+		a.SetParam("ip_autottl", val)
+		a.SetParam("ip6_autottl", val)
+	} else if r < ProbTTLFixed {
+		ttl := 1 + rand.IntN(10)
+		a.SetParam("ip_ttl", strconv.Itoa(ttl))
+	}
+	// else: no TTL fooling
+}
+
+func (m *Mutator) mutateRepeats(s *nfqws2.Strategy) {
+	idx := m.primaryIdx(s)
+	if idx < 0 {
+		return
+	}
+	a := &s.Actions[idx]
+
+	cur := 1
+	if v, ok := a.Param("repeats"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			cur = n
+		}
+	}
+	cur += rand.IntN(3) - 1
+
+	maxR := MaxRepeatsTCP
+	if m.Proto == "udp" {
+		maxR = MaxRepeatsUDP
+	}
+	if cur > maxR {
+		cur = maxR
+	}
+	if cur < MinRepeats {
+		cur = MinRepeats
+	}
+	if cur == 1 {
+		a.DelParam("repeats")
+	} else {
+		a.SetParam("repeats", strconv.Itoa(cur))
+	}
+}
+
+// mutateWSS adds/removes/retunes a wssize action (forces server-side split).
+func (m *Mutator) mutateWSS(s *nfqws2.Strategy) {
+	if i := findFunc(s, "wssize"); i >= 0 {
+		if rand.Float64() < ProbWSSDrop {
+			s.Actions = append(s.Actions[:i], s.Actions[i+1:]...)
+			return
+		}
+		setWsize(&s.Actions[i])
+		return
+	}
+	a := nfqws2.Action{Func: "wssize"}
+	setWsize(&a)
+	s.Actions = append(s.Actions, a)
+}
+
+func (m *Mutator) mutateGlobal(s *nfqws2.Strategy) {
+	r := rand.Float64()
+	switch {
+	case r < ProbGlobalRepeats:
+		m.mutateRepeats(s)
+	case r < ProbGlobalWSS:
+		m.mutateWSS(s)
+	default:
 		if m.Proto == "udp" {
-			inc := rand.Intn(32) - 16
+			inc := rand.IntN(32) - 16
 			if inc == 0 {
 				inc = 2
 			}
-			s.UdpLen.Increment = inc
-		}
-	}
-}
-
-func (m *Mutator) mutateTTL(s *nfqws.Strategy) {
-	r := rand.Float64()
-	if r < ProbTTLAuto {
-		s.TTL.Auto = 1 + rand.Intn(12)
-		s.TTL.Fixed = 0
-	} else if r < ProbTTLFixed {
-		s.TTL.Fixed = 1 + rand.Intn(10)
-		s.TTL.Auto = 0
-	} else {
-		s.TTL.Auto = 0
-		s.TTL.Fixed = 0
-	}
-}
-
-func (m *Mutator) mutateFooling(s *nfqws.Strategy) {
-	// Conservative mutations: Low probability for breaking changes
-	flip := func(current bool, prob float64) bool {
-		if rand.Float64() < prob {
-			return !current
-		}
-		return current
-	}
-
-	s.Fooling.Md5Sig = flip(s.Fooling.Md5Sig, ProbFoolingFlip)
-	// SIGNIFICANTLY REDUCED PROBABILITY FOR BADSUM/BADSEQ
-	// Only 5% chance to flip them on/off, heavily biased towards OFF via Engine penalty
-	s.Fooling.BadSum = flip(s.Fooling.BadSum, ProbFoolingRisky)
-	s.Fooling.BadSeq = flip(s.Fooling.BadSeq, ProbFoolingRisky)
-
-	s.Fooling.Datanoack = flip(s.Fooling.Datanoack, ProbFoolingFlip)
-	s.Fooling.Ts = flip(s.Fooling.Ts, ProbFoolingFlip)
-
-	s.Fooling.HopByHop = false
-	s.Fooling.HopByHop2 = false
-}
-
-func (m *Mutator) pickStrict(keywords ...string) string {
-	var candidates []string
-	for _, b := range m.AvailableBins {
-		for _, k := range keywords {
-			if strings.Contains(b, k) {
-				candidates = append(candidates, b)
-				break
-			}
-		}
-	}
-	if len(candidates) > 0 {
-		return candidates[rand.Intn(len(candidates))]
-	}
-	return ""
-}
-
-func (m *Mutator) pickAny() string {
-	return m.AvailableBins[rand.Intn(len(m.AvailableBins))]
-}
-
-func (m *Mutator) mutateFake(s *nfqws.Strategy) {
-	if m.Proto == "tcp" {
-		r := rand.Float64()
-		tlsBin := m.pickStrict("clienthello")
-
-		if tlsBin != "" && !strings.Contains(tlsBin, "dtls") && r < ProbFakeTCPTLS {
-			s.Fake.TLS = tlsBin
-			if strings.Contains(tlsBin, "kyber") {
-				s.Fake.TlsMod = ""
+			if i := findFunc(s, "udplen"); i >= 0 {
+				s.Actions[i].SetParam("increment", strconv.Itoa(inc))
 			} else {
-				mods := []string{"rnd", "rndsni", "rnd,dupsid", "padencap", ""}
-				s.Fake.TlsMod = mods[rand.Intn(len(mods))]
-				if rand.Float64() < ProbFakeTCPSNI {
-					sni := CommonSNIs[rand.Intn(len(CommonSNIs))]
-					s.Fake.TlsMod = "sni=" + sni
-				}
+				s.Actions = append(s.Actions, nfqws2.Action{
+					Func:   "udplen",
+					Params: []nfqws2.Param{nfqws2.P("increment", strconv.Itoa(inc))},
+				})
 			}
 		} else {
-			if r < ProbFakeTCPSynData {
-				s.Fake.SynData = "0x00"
-			} else {
-				s.Fake.TLS = m.pickAny()
-			}
-			s.Fake.TlsMod = ""
+			m.mutateRepeats(s)
 		}
-	} else {
-		r := rand.Float64()
-		if r < ProbFakeQUIC {
-			quicBin := m.pickStrict("quic")
-			if quicBin != "" && !strings.Contains(quicBin, "short") {
-				s.Fake.Quic = quicBin
-				s.Fake.TlsMod = "rnd"
-				s.Fake.UnknownUdp = ""
-				return
-			}
-		}
-		s.Fake.UnknownUdp = m.pickStrict("wireguard", "dht", "stun", "512")
-		if s.Fake.UnknownUdp == "" {
-			s.Fake.UnknownUdp = m.pickAny()
-		}
-		s.Fake.Quic = ""
 	}
+}
+
+// ---- sanitize ----------------------------------------------------------------
+
+// sanitize canonicalises a strategy into a valid, phase-ordered genome:
+//   - drop actions whose func is outside KnownFuncs (covers IPv6-only pseudo-funcs)
+//   - strip IPv6-only extension-header foolings (and TCP foolings on UDP)
+//   - reorder actions into canonical phases (synack | fake/rst | split family)
+//   - ensure fake/syndata actions carry a blob, split actions carry a pos
+//   - clamp repeats into [MinRepeats, MaxRepeatsOverall]
+//   - normalise blobs to the profile proto (TLS on TCP, QUIC on UDP)
+//   - dedupe identical actions and guarantee a non-empty strategy + filter
+//
+// The result always passes nfqws2.Strategy.Valid().
+func (m *Mutator) sanitize(s *nfqws2.Strategy) {
+	// 1. drop unknown/IPv6-only funcs; strip incompatible params.
+	kept := s.Actions[:0:0]
+	for _, a := range s.Actions {
+		if _, ok := nfqws2.KnownFuncs[a.Func]; !ok {
+			continue
+		}
+		for _, k := range ipv6OnlyParams {
+			a.DelParam(k)
+		}
+		if m.Proto == "udp" {
+			for _, k := range tcpOnlyParams {
+				a.DelParam(k)
+			}
+		}
+		kept = append(kept, a)
+	}
+	s.Actions = kept
+
+	// 2. stable phase reorder.
+	sort.SliceStable(s.Actions, func(i, j int) bool {
+		return funcPhase(s.Actions[i].Func) < funcPhase(s.Actions[j].Func)
+	})
+
+	// 3. per-action fixups.
+	for i := range s.Actions {
+		a := &s.Actions[i]
+
+		if v, ok := a.Param("blob"); ok && v != "" {
+			a.SetParam("blob", m.protoBlob(v))
+		}
+		if needsBlob(a.Func) {
+			if v, ok := a.Param("blob"); !ok || v == "" {
+				a.SetParam("blob", m.defaultBlob())
+			}
+		}
+
+		switch {
+		case a.Func == "tcpseg":
+			if _, ok := a.Param("pos"); !ok {
+				a.SetParam("pos", "1,midsld")
+			}
+		case needsPos(a.Func):
+			if _, ok := a.Param("pos"); !ok {
+				a.SetParam("pos", "2")
+			}
+		}
+
+		if v, ok := a.Param("repeats"); ok {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < MinRepeats {
+				n = MinRepeats
+			}
+			if n > MaxRepeatsOverall {
+				n = MaxRepeatsOverall
+			}
+			if n == 1 {
+				a.DelParam("repeats")
+			} else {
+				a.SetParam("repeats", strconv.Itoa(n))
+			}
+		}
+	}
+
+	// 4. dedupe identical actions (keep first occurrence).
+	s.Actions = dedupeActions(s.Actions)
+
+	// 5. never leave an empty genome.
+	if len(s.Actions) == 0 {
+		s.Actions = []nfqws2.Action{m.defaultAction()}
+	}
+
+	// 6. guarantee a filter matching the proto.
+	m.ensureFilter(s)
+}
+
+// ---- helpers -----------------------------------------------------------------
+
+// funcPhase returns the canonical phase bucket of a known desync function.
+// Lower phases render first: synack/window setup, then fakes, then tamper, then
+// the split/segment family.
+func funcPhase(fn string) int {
+	switch fn {
+	case "synack_split", "synack", "wsize", "wssize", "syndata":
+		return 0
+	case "fake", "rst":
+		return 1
+	case "http_hostcase", "http_domcase", "http_methodeol", "http_unixeol":
+		return 2
+	default:
+		// multisplit, multidisorder, fakedsplit, fakeddisorder, hostfakesplit,
+		// tcpseg, udplen, drop, send, pktmod, dht_dn
+		return 3
+	}
+}
+
+func isSplitFunc(fn string) bool {
+	switch fn {
+	case "multisplit", "multidisorder", "fakedsplit", "fakeddisorder", "hostfakesplit", "tcpseg":
+		return true
+	}
+	return false
+}
+
+func needsBlob(fn string) bool {
+	return fn == "fake" || fn == "syndata"
+}
+
+func needsPos(fn string) bool {
+	switch fn {
+	case "multisplit", "multidisorder", "fakedsplit", "fakeddisorder":
+		return true
+	}
+	return false
+}
+
+func simplifyFunc(fn string) string {
+	switch fn {
+	case "multidisorder":
+		return "multisplit"
+	case "fakeddisorder":
+		return "fakedsplit"
+	default:
+		return fn
+	}
+}
+
+// toDisorder converts split-family actions to their disorder variant, or adds a
+// multidisorder if none is present.
+func (m *Mutator) toDisorder(s *nfqws2.Strategy) {
+	converted := false
+	for i := range s.Actions {
+		switch s.Actions[i].Func {
+		case "multisplit":
+			s.Actions[i].Func = "multidisorder"
+			converted = true
+		case "fakedsplit":
+			s.Actions[i].Func = "fakeddisorder"
+			converted = true
+		}
+	}
+	if !converted {
+		s.Actions = append(s.Actions, nfqws2.Action{Func: "multidisorder"})
+	}
+}
+
+// primaryIdx returns the index of the action fooling/TTL/repeats attach to:
+// prefer a split-family action, then a fake, then the first action.
+func (m *Mutator) primaryIdx(s *nfqws2.Strategy) int {
+	if i := m.splitIdx(s); i >= 0 {
+		return i
+	}
+	if i := findFunc(s, "fake"); i >= 0 {
+		return i
+	}
+	if len(s.Actions) > 0 {
+		return 0
+	}
+	return -1
+}
+
+// splitIdx returns the index of the first split-family action, or -1.
+func (m *Mutator) splitIdx(s *nfqws2.Strategy) int {
+	for i := range s.Actions {
+		if isSplitFunc(s.Actions[i].Func) {
+			return i
+		}
+	}
+	return -1
+}
+
+func findFunc(s *nfqws2.Strategy, fn string) int {
+	for i := range s.Actions {
+		if s.Actions[i].Func == fn {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *Mutator) pickBlob() string {
+	if m.Proto == "udp" {
+		return quicBlobs[rand.IntN(len(quicBlobs))]
+	}
+	return tlsBlobs[rand.IntN(len(tlsBlobs))]
+}
+
+func (m *Mutator) defaultBlob() string {
+	if m.Proto == "udp" {
+		return nfqws2.BlobDefaultQUIC
+	}
+	return nfqws2.BlobDefaultTLS
+}
+
+// protoBlob keeps the default blob consistent with the profile transport.
+// Custom 0xHEX blobs are left untouched.
+func (m *Mutator) protoBlob(blob string) string {
+	if m.Proto == "udp" && blob == nfqws2.BlobDefaultTLS {
+		return nfqws2.BlobDefaultQUIC
+	}
+	if m.Proto == "tcp" && blob == nfqws2.BlobDefaultQUIC {
+		return nfqws2.BlobDefaultTLS
+	}
+	return blob
+}
+
+func (m *Mutator) defaultAction() nfqws2.Action {
+	return nfqws2.Action{
+		Func:   "fake",
+		Params: []nfqws2.Param{nfqws2.P("blob", m.defaultBlob())},
+	}
+}
+
+func (m *Mutator) ensureFilter(s *nfqws2.Strategy) {
+	if s.Filter.TCP != "" || s.Filter.UDP != "" {
+		return
+	}
+	if m.Proto == "udp" {
+		s.Filter = nfqws2.Filter{UDP: "443", L7: []string{"quic"}, Payload: []string{"quic_initial"}}
+	} else {
+		s.Filter = nfqws2.Filter{TCP: "80,443", L7: []string{"tls", "http"}, Payload: []string{"tls_client_hello"}}
+	}
+}
+
+func setWsize(a *nfqws2.Action) {
+	p := wsizePairs[rand.IntN(len(wsizePairs))]
+	a.SetParam("wsize", p[0])
+	if p[1] != "" {
+		a.SetParam("scale", p[1])
+	} else {
+		a.DelParam("scale")
+	}
+}
+
+func hasBadSeq(a *nfqws2.Action) bool {
+	if _, ok := a.Param("tcp_seq"); ok {
+		return true
+	}
+	_, ok := a.Param("tcp_ack")
+	return ok
+}
+
+// setBadSeq maps v1 badseq onto v2: tcp_seq for SYN-time actions, tcp_ack (+
+// tcp_ts_up, the Linux badack workaround) for data actions.
+func setBadSeq(a *nfqws2.Action) {
+	if a.Func == "syndata" || a.Func == "synack_split" || a.Func == "synack" {
+		a.SetParam("tcp_seq", BadSeqValue)
+		return
+	}
+	a.SetParam("tcp_ack", BadAckValue)
+	a.SetParam("tcp_ts_up", "")
+}
+
+func clearBadSeq(a *nfqws2.Action) {
+	a.DelParam("tcp_seq")
+	a.DelParam("tcp_ack")
+	a.DelParam("tcp_ts_up")
+}
+
+func dedupeActions(as []nfqws2.Action) []nfqws2.Action {
+	seen := make(map[string]struct{}, len(as))
+	out := as[:0:0]
+	for _, a := range as {
+		key := actionKey(a)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, a)
+	}
+	return out
+}
+
+func actionKey(a nfqws2.Action) string {
+	var b strings.Builder
+	b.WriteString(a.Func)
+	for _, p := range a.Params {
+		b.WriteByte('|')
+		b.WriteString(p.Key)
+		b.WriteByte('=')
+		b.WriteString(p.Value)
+	}
+	return b.String()
 }
