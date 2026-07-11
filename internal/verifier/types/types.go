@@ -46,8 +46,12 @@ type Target struct {
 	Threshold    int
 	Proto        Protocol
 	IgnoreStatus bool
-	MinSpeed     float64
-	Timeout      time.Duration
+	// HandshakeOnly makes the checker PASS on a completed TLS handshake + HEAD
+	// (the site opens) and skip the 64 KiB POST. For targets the app only needs
+	// to reach, where the POST models an upload the DPI throttles independently.
+	HandshakeOnly bool
+	MinSpeed      float64
+	Timeout       time.Duration
 }
 
 type ProviderDefinition struct {

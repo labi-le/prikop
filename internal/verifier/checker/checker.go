@@ -234,6 +234,11 @@ func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 //   - POST timeout + alive              → detected ❗ (FAIL — DPI throttling)
 //   - POST timeout + !alive             → probably detected ⚠️ (SKIP — inconclusive)
 //   - POST instant error (any alive)    → possible/unlikely detected ⚠️ (SKIP — inconclusive)
+//
+// When Target.HandshakeOnly is set, step 2 (the POST) is skipped: PASS as soon
+// as the HEAD completes (the site opens for the client), FAIL otherwise. Use it
+// for sites the app only needs to REACH — the 64 KiB POST models a heavy upload
+// the DPI can throttle independently of whether the page loads.
 func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client) checkResult {
 	// --- Step 1: Liveness Check (HEAD) ---
 	aliveURL := getUniqueURL(t.URL)
@@ -247,6 +252,11 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 	respHead, err := client.Do(reqHead)
 	if err != nil {
 		reason := AnalyzeError(err)
+		if t.HandshakeOnly {
+			// Known-alive site (e.g. discord.com): a failed HEAD IS the DPI block,
+			// not a dead target — fail so the GA prunes this strategy.
+			return failResult(reason, "handshake failed: "+err.Error())
+		}
 		if reason == model.ReasonTimeout {
 			// JS: AbortError on HEAD → alive=false, possibleAlive=false → skip
 			return failResult(model.ReasonSkip, "HEAD timeout (target dead/unreachable)")
@@ -255,6 +265,9 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 		alive = false
 	} else {
 		respHead.Body.Close()
+		if t.HandshakeOnly {
+			return okResult // handshake + HEAD reached the server → opens → PASS
+		}
 		alive = true
 	}
 
