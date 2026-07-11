@@ -97,13 +97,28 @@ func Run(cfg Config, log zerolog.Logger) {
 	}
 	log.Info().Int("count", len(discoveredBins)).Msg("Discovered bin files")
 
-	providers := tcp16_20.Cases()
-	log.Info().Int("count", len(providers)).Msg("Initialized provider definitions")
+	// All providers = availability (google/discord/nixos) + the generated
+	// tcp16_20 suite. -provider narrows to one across BOTH sets; previously it
+	// filtered only the availability set, so the tcp16_20 cases always ran.
+	allProviders := append(availability.InitializeProviders(""), tcp16_20.Cases()...)
+	if cfg.Provider != "" {
+		var sel []types.ProviderDefinition
+		for _, p := range allProviders {
+			if p.Name == cfg.Provider {
+				sel = append(sel, p)
+			}
+		}
+		if len(sel) == 0 {
+			log.Fatal().Str("provider", cfg.Provider).Msg("Unknown -provider")
+		}
+		allProviders = sel
+	}
+	log.Info().Int("count", len(allProviders)).Msg("Initialized provider definitions")
 
 	// STARTUP VALIDATION: Ensure all targets are within their CIDR ranges
 	log.Info().Msg("Validating all provider targets against CIDRs...")
 	var hasValidationErrors bool
-	for _, p := range providers {
+	for _, p := range allProviders {
 		if p.CIDRFile == "" {
 			continue
 		}
@@ -126,8 +141,6 @@ func Run(cfg Config, log zerolog.Logger) {
 		log.Fatal().Msg("Startup validation failed. Please fix the target lists or CIDR sources listed above.")
 	}
 	log.Info().Msg("Startup validation passed successfully")
-
-	allProviders := append(availability.InitializeProviders(cfg.Provider), providers...)
 
 	optimizer := NewOptimizer(pool, log.With().Str("component", "optimizer").Logger())
 	runProviders(ctx, optimizer, allProviders, discoveredBins, report, log)
