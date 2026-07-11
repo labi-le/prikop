@@ -2,9 +2,12 @@
 // hosting provider) and generates suite_v1_generated.go plus a per-provider
 // ipset file (targets/<slug>-cidr.txt) containing the exact test IPs as /32.
 //
-// Usage:
+// Usage (canonical — regenerates the suite and ipset files):
 //
-//	go run ./cmd/generate-tcp16_20
+//	go generate ./internal/verifier/tcp16_20/
+//
+// It locates the module root via go.mod, so it also works standalone:
+//
 //	go run ./cmd/generate-tcp16_20 -url <url> -out <path> -gens <n>
 package main
 
@@ -188,12 +191,11 @@ func buildTemplateData(entries []SuiteEntry, gens int) (templateData, error) {
 // writeIPSet writes the provider's test IPs as /32 CIDRs to
 // targets/<slug>-cidr.txt and returns the project-relative path.
 func writeIPSet(slug string, ips []string) (string, error) {
-	wd, err := os.Getwd()
+	root, err := projectRoot()
 	if err != nil {
 		return "", err
 	}
-	// go:generate runs in internal/verifier/tcp16_20; project root is 3 up.
-	targetsDir := filepath.Join(wd, "..", "..", "..", "targets")
+	targetsDir := filepath.Join(root, "targets")
 	if err := os.MkdirAll(targetsDir, 0o755); err != nil {
 		return "", err
 	}
@@ -211,6 +213,27 @@ func writeIPSet(slug string, ips []string) (string, error) {
 	}
 	fmt.Printf("Wrote %d IPs for %s -> %s\n", len(ips), slug, path)
 	return "targets/" + slug + "-cidr.txt", nil
+}
+
+// projectRoot walks up from the current directory to the module root (the
+// directory containing go.mod), so ipset output lands correctly whether the
+// tool runs via `go generate` (cwd = the source package) or `go run` from any
+// directory.
+func projectRoot() (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("go.mod not found above working directory")
+		}
+		dir = parent
+	}
 }
 
 func fetchSuite(url string) ([]SuiteEntry, error) {
