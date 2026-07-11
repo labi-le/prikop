@@ -36,6 +36,8 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 	pop = append(pop, generateImportedStrategies()...)
 	// 1b. Google-ClientHello-blob variants (Zapret-Manager's YouTube technique).
 	pop = append(pop, generateGoogleBlobStrategies()...)
+	// 1c. Discord techniques from flowseal + Zapret-Manager (discord.media).
+	pop = append(pop, generateDiscordStrategies()...)
 	// 2. SNI-independent structural archetypes.
 	pop = append(pop, generateTCPStatic()...)
 	// 3. SNI/host-bearing archetypes, one per common target.
@@ -80,6 +82,21 @@ func httpStrat(actions ...nfqws2.Action) nfqws2.Strategy {
 
 func udpStrat(actions ...nfqws2.Action) nfqws2.Strategy {
 	return nfqws2.Strategy{Filter: quicFilter(), Actions: actions}
+}
+
+// discordFilter selects Discord's TLS TCP ports: 443 (discord.com, the gateway,
+// the API, the CDN) plus 2053/2083/2087/2096/8443 (discord.media voice/media
+// over TCP). Host scoping stays the provider's job (--hostlist-domains).
+func discordFilter() nfqws2.Filter {
+	return nfqws2.Filter{
+		TCP:     "80,443,2053,2083,2087,2096,8443",
+		L7:      []string{"tls"},
+		Payload: []string{"tls_client_hello"},
+	}
+}
+
+func discordStrat(actions ...nfqws2.Action) nfqws2.Strategy {
+	return nfqws2.Strategy{Filter: discordFilter(), Actions: actions}
 }
 
 // ---- Action builders -------------------------------------------------------
@@ -259,6 +276,43 @@ func generateGoogleBlobStrategies() []nfqws2.Strategy {
 			fakeTLSBlob(g, "rnd,dupsid,sni=ggpht.com", nfqws2.Flag("badsum")),
 			split("multisplit", "2,sld", nfqws2.P("seqovl", "2108"), nfqws2.P("seqovl_pattern", g)),
 		),
+	}
+}
+
+// ---- Discord imports (flowseal + Zapret-Manager) ---------------------------
+
+// generateDiscordStrategies imports the discord.media techniques from the
+// flowseal and Zapret-Manager strategy sets, translated to the v2 genome:
+// fooling=ts -> tcp_ts_up, fooling=badseq -> tcp_seq, and a --dpi-desync-fake-tls
+// / --split-seqovl-pattern of a real google ClientHello -> the google_tls blob.
+// They carry discordFilter (which includes 443), so they seed the discord_tcp
+// provider and help any TLS target.
+func generateDiscordStrategies() []nfqws2.Strategy {
+	g := nfqws2.BlobGoogleTLS
+	return []nfqws2.Strategy{
+		// multisplit seqovl=681 pos=1
+		discordStrat(split("multisplit", "1", nfqws2.P("seqovl", "681"))),
+		// multisplit seqovl=652 pos=2
+		discordStrat(split("multisplit", "2", nfqws2.P("seqovl", "652"))),
+		// multisplit pos=2,sniext+1 seqovl=679, overlap = real google ClientHello
+		discordStrat(split("multisplit", "2,sniext+1",
+			nfqws2.P("seqovl", "679"), nfqws2.P("seqovl_pattern", g))),
+		// fake (default TLS) + fakedsplit, repeats=6, fooling=ts
+		discordStrat(
+			fakeTLS("", nfqws2.P("repeats", "6"), nfqws2.Flag("tcp_ts_up")),
+			split("fakedsplit", "1"),
+		),
+		// fake (google ClientHello) + multisplit, repeats=6, fooling=badseq
+		discordStrat(
+			fakeTLSBlob(g, "", nfqws2.P("repeats", "6"), nfqws2.P("tcp_seq", evolution.BadSeqValue)),
+			split("multisplit", "1"),
+		),
+		// plain fake (default TLS, no mod), repeats=6, fooling=badseq
+		discordStrat(fakeTLS("", nfqws2.P("repeats", "6"), nfqws2.P("tcp_seq", evolution.BadSeqValue))),
+		// hostfakesplit host=www.google.com, repeats=4, fooling=ts
+		discordStrat(nfqws2.Action{Func: "hostfakesplit", Params: []nfqws2.Param{
+			nfqws2.P("host", "www.google.com"), nfqws2.P("repeats", "4"), nfqws2.Flag("tcp_ts_up"),
+		}}),
 	}
 }
 
