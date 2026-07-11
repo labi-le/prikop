@@ -98,13 +98,19 @@ func Run(cfg Config, log zerolog.Logger) {
 	log.Info().Int("count", len(discoveredBins)).Msg("Discovered bin files")
 
 	// All providers = availability (google/discord/nixos) + the generated
-	// tcp16_20 suite. -provider narrows to one across BOTH sets; previously it
-	// filtered only the availability set, so the tcp16_20 cases always ran.
+	// tcp16_20 suite. -provider narrows to the named set (comma-separated) across
+	// BOTH; previously it filtered only availability, so tcp16_20 always ran.
 	allProviders := append(availability.InitializeProviders(""), tcp16_20.Cases()...)
 	if cfg.Provider != "" {
+		want := map[string]bool{}
+		for _, name := range strings.Split(cfg.Provider, ",") {
+			if n := strings.TrimSpace(name); n != "" {
+				want[n] = true
+			}
+		}
 		var sel []types.ProviderDefinition
 		for _, p := range allProviders {
-			if p.Name == cfg.Provider {
+			if want[p.Name] {
 				sel = append(sel, p)
 			}
 		}

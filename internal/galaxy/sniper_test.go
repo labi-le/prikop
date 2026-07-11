@@ -122,7 +122,7 @@ func keys(m map[string]bool) []string {
 // TestDiscordSeeds confirms the flowseal/Zapret-Manager discord.media techniques
 // are seeded into the TCP population, scoped to Discord's TCP ports (443 for the
 // gateway/API/CDN plus the 2053-8443 media ports so they also apply to the
-// discord_tcp provider), render to their exact v2 form, and never leak to UDP.
+// discord_* providers), render to their exact v2 form, and never leak to UDP.
 func TestDiscordSeeds(t *testing.T) {
 	const discordPorts = "80,443,2053,2083,2087,2096,8443"
 	const want652 = "--filter-tcp=80,443,2053,2083,2087,2096,8443 --filter-l7=tls --payload=tls_client_hello --lua-desync=multisplit:pos=2:seqovl=652"

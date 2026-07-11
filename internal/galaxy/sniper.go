@@ -285,8 +285,8 @@ func generateGoogleBlobStrategies() []nfqws2.Strategy {
 // flowseal and Zapret-Manager strategy sets, translated to the v2 genome:
 // fooling=ts -> tcp_ts_up, fooling=badseq -> tcp_seq, and a --dpi-desync-fake-tls
 // / --split-seqovl-pattern of a real google ClientHello -> the google_tls blob.
-// They carry discordFilter (which includes 443), so they seed the discord_tcp
-// provider and help any TLS target.
+// They carry discordFilter (which includes 443), so they seed the discord_*
+// providers (gateway/api/cdn/media) and help any TLS target.
 func generateDiscordStrategies() []nfqws2.Strategy {
 	g := nfqws2.BlobGoogleTLS
 	return []nfqws2.Strategy{

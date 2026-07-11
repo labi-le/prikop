@@ -18,7 +18,7 @@ func main() {
 
 	var cfg orchestrator.Config
 	flag.StringVar(&cfg.FakePath, "fake-path", "/app/fake", "Path to bins")
-	flag.StringVar(&cfg.Provider, "provider", "", "Run only this provider (e.g. cloudflare, google_tcp)")
+	flag.StringVar(&cfg.Provider, "provider", "", "Run only these providers, comma-separated (e.g. discord_gateway,discord_api or google_tcp)")
 
 	flag.Parse()
 

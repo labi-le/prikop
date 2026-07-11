@@ -4,25 +4,34 @@ import (
 	"prikop/internal/verifier/types"
 )
 
-// Discord has two legs; only the chat/web leg is an nfqws2 GA provider here.
+// Discord's app path is several distinct Cloudflare-fronted domains that, on a
+// real DPI, do NOT all yield to one desync. So — like flowseal/Zapret-Manager,
+// which use a separate profile per domain — each is its own GA provider that
+// finds and pins its own winning strategy (one target, SuccessThreshold 1.0),
+// scoped by --hostlist-domains so the emitted config desyncs only that domain.
 //
-//  1. discord_tcp — HTTPS/TLS to discord.com, its API and CDN (chat + web).
-//  2. voice       — NOT a GA provider. Discord mandates the DAVE (E2EE) protocol
-//     for all non-stage voice, so no bot/active probe can complete the voice
-//     handshake; the only test is sniffing a REAL call. That lives in
-//     orchestrator.runVoiceCapture, run by `-provider discord_voice` (host-level,
-//     needs root; see also voice-dpi-test.sh for the standalone form).
+// Deliberately excluded:
+//   - discord.com apex: not on the app's path, and throttled even under a working
+//     zapret2 — a false anchor that made the old single discord_tcp unwinnable.
+//   - voice: Discord mandates DAVE (E2EE) for non-stage voice, so no active probe
+//     completes the handshake; it is verified by sniffing a real call
+//     (orchestrator.runVoiceCapture, -provider discord_voice). discord_media here
+//     only checks that the media domain's TLS reaches through the DPI on 443.
 func init() {
-	registerProvider(types.ProviderDefinition{
-		Name:             "discord_tcp",
-		Gens:             5,
-		Proto:            "tcp",
-		SuccessThreshold: 0.95,
-		Targets: []types.Target{
-			{URL: "https://discord.com", Threshold: 5000, Proto: types.ProtoTCP},
-			{URL: "https://discord.com/api/v9/gateway", Threshold: 1000, Proto: types.ProtoTCP},
-			{URL: "https://gateway.discord.gg", Threshold: 1000, IgnoreStatus: true, Proto: types.ProtoTCP},
-			{URL: "https://cdn.discordapp.com/clan-badges/700478419527270430/dea97e909a0211e2479d75cd11c2ec41.png", Threshold: 1000, IgnoreStatus: true, Proto: types.ProtoTCP},
-		},
-	})
+	discord := func(name, hostlistDomain, url string) types.ProviderDefinition {
+		return types.ProviderDefinition{
+			Name:             name,
+			Gens:             5,
+			Proto:            "tcp",
+			SuccessThreshold: 1.0,
+			Filters:          "--hostlist-domains=" + hostlistDomain,
+			Targets: []types.Target{
+				{URL: url, IgnoreStatus: true, Proto: types.ProtoTCP},
+			},
+		}
+	}
+	registerProvider(discord("discord_gateway", "discord.gg", "https://gateway.discord.gg"))
+	registerProvider(discord("discord_api", "discord.com", "https://discord.com/api/v9/gateway"))
+	registerProvider(discord("discord_cdn", "discordapp.com", "https://cdn.discordapp.com/clan-badges/700478419527270430/dea97e909a0211e2479d75cd11c2ec41.png"))
+	registerProvider(discord("discord_media", "discord.media", "https://discord.media"))
 }
