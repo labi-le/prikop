@@ -1,0 +1,21 @@
+# Version control & IDE
+.git
+.gitignore
+.idea
+
+# Agent tooling, skills, generated docs/logs
+.claude
+skill
+docs
+context.md
+logs.txt
+
+# Local dev environment & helper scripts
+shell.nix
+Makefile
+Dockerfile
+.dockerignore
+*.sh
+
+# Go test files are not needed in the runtime image
+**/*_test.go
