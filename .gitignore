@@ -53,3 +53,4 @@ upload-tg.sh
 
 # Generated CIDR files (run `go generate` to recreate)
 targets/*-cidr.txt
+logs.txt
