@@ -1,4 +1,4 @@
-.PHONY: build run
+.PHONY: build run voice-test
 
 CURRENT_DIR := $(shell pwd)
 
@@ -22,6 +22,13 @@ run: build
 	   -e HOST_SOCKET_DIR=$(HOST_SOCKET_DIR) \
 	   -e HOST_TARGETS_DIR=$(HOST_TARGETS_DIR) \
 	   prikop:latest $(if $(PROVIDER),-provider $(PROVIDER))
+
+# Voice check runs on the HOST (needs root + visibility of your real call), not
+# in Docker: Discord's DAVE makes active probing impossible, so we sniff a call.
+voice-test:
+	$(NIX_RUN) "CGO_ENABLED=0 go build -o /tmp/prikop-voice ./cmd/prikop"
+	@echo ">>> join a Discord voice call and TALK during the ~20s capture"
+	sudo /tmp/prikop-voice -provider discord_voice
 
 build: generate
 	docker build -t prikop:latest .

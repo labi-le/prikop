@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"prikop/internal/container"
 	"prikop/internal/model"
@@ -13,10 +14,12 @@ import (
 	"prikop/internal/verifier/checker"
 	"prikop/internal/verifier/tcp16_20"
 	"prikop/internal/verifier/types"
+	"prikop/internal/voicecap"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/moby/moby/client"
 	"github.com/rs/zerolog"
@@ -42,6 +45,15 @@ var pool *container.WorkerPool
 func Run(cfg Config, log zerolog.Logger) {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// discord_voice is a host-level, root-gated PASSIVE voice check: Discord's
+	// mandatory DAVE (E2EE) makes an active/bot probe impossible, so we sniff a
+	// real call instead. It uses neither the Docker pool nor the GA — handle it
+	// up front and return.
+	if cfg.Provider == voiceProvider {
+		runVoiceCapture(ctx, log)
+		return
+	}
 
 	cli, err := client.New(client.FromEnv)
 	if err != nil {
@@ -119,6 +131,51 @@ func Run(cfg Config, log zerolog.Logger) {
 
 	optimizer := NewOptimizer(pool, log.With().Str("component", "optimizer").Logger())
 	runProviders(ctx, optimizer, allProviders, discoveredBins, report, log)
+}
+
+const voiceProvider = "discord_voice"
+
+// runVoiceCapture verifies Discord voice by sniffing a live call (see package
+// voicecap for why active probing is impossible). Needs root + tcpdump; if
+// either is missing it skips rather than failing.
+func runVoiceCapture(ctx context.Context, log zerolog.Logger) {
+	vlog := log.With().Str("provider", voiceProvider).Logger()
+	if os.Geteuid() != 0 {
+		vlog.Warn().Msg("skipping: packet capture needs root (run: sudo prikop -provider discord_voice)")
+		return
+	}
+	if _, err := exec.LookPath("tcpdump"); err != nil {
+		vlog.Warn().Msg("skipping: tcpdump not found in PATH")
+		return
+	}
+	iface := voicecap.DefaultIface()
+	const window = 20 * time.Second
+	vlog.Info().Str("iface", iface).Dur("window", window).Msg("capturing Discord voice UDP — join a call and talk")
+
+	res, err := voicecap.Capture(ctx, iface, window)
+	if err != nil {
+		vlog.Error().Err(err).Msg("voice capture failed")
+		return
+	}
+	if len(res.Flows) == 0 {
+		vlog.Warn().Msg("no Discord voice traffic seen — are you in a call? (or wrong interface)")
+		return
+	}
+	for i, f := range res.Flows {
+		if i >= 5 {
+			break
+		}
+		vlog.Info().Str("server", f.Server).
+			Int("out_pkts", f.OutPkts).Int("out_bytes", f.OutBytes).
+			Int("in_pkts", f.InPkts).Int("in_bytes", f.InBytes).
+			Bool("bidirectional", f.InPkts > 0).Msg("voice flow")
+	}
+	top := res.Flows[0]
+	if res.Bidirectional {
+		vlog.Info().Str("server", top.Server).Msg("PASS: Discord voice UDP is bidirectional — it crosses the DPI")
+	} else {
+		vlog.Warn().Str("server", top.Server).Msg("FAIL: top flow is outbound-only — voice UDP blocked by the DPI")
+	}
 }
 
 var (
