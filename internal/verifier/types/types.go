@@ -45,6 +45,7 @@ type Verifier interface {
 type Target struct {
 	ID           string
 	URL          string
+	SNI          string
 	Threshold    int
 	Proto        Protocol
 	IgnoreStatus bool

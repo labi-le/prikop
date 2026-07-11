@@ -1,6 +1,13 @@
 // Command generate-tcp16_20 fetches the DPI-detector suite (IP endpoints per
 // hosting provider) and generates suite_v1_generated.go plus a per-provider
-// ipset file (targets/<slug>-cidr.txt) containing the exact test IPs as /32.
+// ipset file (targets/<slug>-cidr.txt).
+//
+// The ipset is the union of every provider ASN's announced IPv4 prefixes
+// (via RIPEstat) and the suite's exact test IPs as host routes. The prefixes
+// give deployment-ready coverage of the whole provider range; the host routes
+// guarantee the test IPs pass startup CIDR validation even when their ASN
+// attribution differs from RIPE's announced set. ASN lookups degrade
+// gracefully: on failure a provider falls back to host routes only.
 //
 // Usage (canonical — regenerates the suite and ipset files):
 //
@@ -35,6 +42,7 @@ const (
 	defaultSuiteURL   = "https://raw.githubusercontent.com/Runnin4ik/dpi-detector/refs/heads/main/tcp16.json"
 	defaultOutputFile = "internal/verifier/tcp16_20/suite_v1_generated.go"
 	defaultThreshold  = 64 * 1024 // 64KB per the dpi-checkers algorithm
+	ripeStatURL       = "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS"
 )
 
 // SuiteEntry is one endpoint in the DPI-detector suite.
@@ -51,6 +59,7 @@ type templateTarget struct {
 	ID        string
 	URL       string
 	Threshold int
+	SNI       string
 }
 
 type templateProvider struct {
@@ -123,15 +132,40 @@ func baseSlug(provider string) string {
 	return first
 }
 
-// targetURL builds the check URL from an IP and port.
+// asNum extracts the leading numeric AS number from a raw suite value that may
+// carry decoration (e.g. "24940☆" -> "24940").
+func asNum(raw string) string {
+	var b strings.Builder
+	for _, r := range raw {
+		if r < '0' || r > '9' {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// hostCIDR renders an IP as a host route (/32 for IPv4, /128 for IPv6).
+func hostCIDR(ip string) string {
+	if strings.Contains(ip, ":") {
+		return ip + "/128"
+	}
+	return ip + "/32"
+}
+
+// targetURL builds the check URL from an IP and port (IPv6 bracketed).
 func targetURL(ip string, port int) string {
+	host := ip
+	if strings.Contains(ip, ":") {
+		host = "[" + ip + "]"
+	}
 	switch port {
 	case 0, 443:
-		return "https://" + ip + "/"
+		return "https://" + host + "/"
 	case 80:
-		return "http://" + ip + "/"
+		return "http://" + host + "/"
 	default:
-		return fmt.Sprintf("https://%s:%d/", ip, port)
+		return fmt.Sprintf("https://%s:%d/", host, port)
 	}
 }
 
@@ -141,8 +175,7 @@ func buildTemplateData(entries []SuiteEntry, gens int) (templateData, error) {
 		if e.IP == "" {
 			continue
 		}
-		slug := baseSlug(e.Provider)
-		grouped[slug] = append(grouped[slug], e)
+		grouped[baseSlug(e.Provider)] = append(grouped[baseSlug(e.Provider)], e)
 	}
 
 	slugs := make([]string, 0, len(grouped))
@@ -156,21 +189,39 @@ func buildTemplateData(entries []SuiteEntry, gens int) (templateData, error) {
 		list := grouped[slug]
 
 		var targets []templateTarget
-		seen := make(map[string]struct{})
-		var ips []string
+		seenTarget := make(map[string]struct{})
+		cidrs := make(map[string]struct{})
+		asns := make(map[string]struct{})
+
 		for _, e := range list {
-			targets = append(targets, templateTarget{
-				ID:        e.ID,
-				URL:       targetURL(e.IP, e.Port),
-				Threshold: defaultThreshold,
-			})
-			if _, ok := seen[e.IP]; !ok {
-				seen[e.IP] = struct{}{}
-				ips = append(ips, e.IP)
+			url := targetURL(e.IP, e.Port)
+			if _, ok := seenTarget[url]; !ok {
+				seenTarget[url] = struct{}{}
+				targets = append(targets, templateTarget{
+					ID:        e.ID,
+					URL:       url,
+					Threshold: defaultThreshold,
+					SNI:       e.SNI,
+				})
+			}
+			cidrs[hostCIDR(e.IP)] = struct{}{} // host route guarantees CIDR validation passes
+			if n := asNum(e.ASN); n != "" {
+				asns[n] = struct{}{}
 			}
 		}
 
-		cidrFile, err := writeIPSet(slug, ips)
+		for asn := range asns {
+			prefixes, err := asnPrefixes(asn)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: AS%s prefixes for %s: %v (host routes only)\n", asn, slug, err)
+				continue
+			}
+			for _, p := range prefixes {
+				cidrs[p] = struct{}{}
+			}
+		}
+
+		cidrFile, err := writeCIDRs(slug, cidrs)
 		if err != nil {
 			return templateData{}, fmt.Errorf("writing ipset for %s: %w", slug, err)
 		}
@@ -178,7 +229,7 @@ func buildTemplateData(entries []SuiteEntry, gens int) (templateData, error) {
 		provs = append(provs, templateProvider{
 			Name:     slug,
 			Slug:     slug,
-			CIDR:     "", // ipset is built from the suite's exact IPs
+			CIDR:     "AS " + strings.Join(sortedKeys(asns), ","),
 			CIDRFile: cidrFile,
 			Targets:  targets,
 			Gens:     gens,
@@ -188,9 +239,61 @@ func buildTemplateData(entries []SuiteEntry, gens int) (templateData, error) {
 	return templateData{Providers: provs}, nil
 }
 
-// writeIPSet writes the provider's test IPs as /32 CIDRs to
-// targets/<slug>-cidr.txt and returns the project-relative path.
-func writeIPSet(slug string, ips []string) (string, error) {
+func sortedKeys(m map[string]struct{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+var asnCache = make(map[string][]string)
+
+// asnPrefixes returns the ASN's announced IPv4 prefixes (RIPEstat), memoized.
+func asnPrefixes(asn string) ([]string, error) {
+	if v, ok := asnCache[asn]; ok {
+		return v, nil
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Get(ripeStatURL + asn)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var r struct {
+		Data struct {
+			Prefixes []struct {
+				Prefix string `json:"prefix"`
+			} `json:"prefixes"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, err
+	}
+
+	var out []string
+	for _, p := range r.Data.Prefixes {
+		if strings.Contains(p.Prefix, ".") { // IPv4 only; prikop drives the IPv4 path
+			out = append(out, p.Prefix)
+		}
+	}
+	asnCache[asn] = out
+	return out, nil
+}
+
+// writeCIDRs writes the sorted CIDR set to targets/<slug>-cidr.txt (under the
+// module root) and returns the project-relative path.
+func writeCIDRs(slug string, cidrs map[string]struct{}) (string, error) {
 	root, err := projectRoot()
 	if err != nil {
 		return "", err
@@ -200,18 +303,18 @@ func writeIPSet(slug string, ips []string) (string, error) {
 		return "", err
 	}
 
-	sort.Strings(ips)
+	list := sortedKeys(cidrs)
 	var b strings.Builder
-	for _, ip := range ips {
-		b.WriteString(ip)
-		b.WriteString("/32\n")
+	for _, c := range list {
+		b.WriteString(c)
+		b.WriteByte('\n')
 	}
 
 	path := filepath.Join(targetsDir, slug+"-cidr.txt")
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
 		return "", err
 	}
-	fmt.Printf("Wrote %d IPs for %s -> %s\n", len(ips), slug, path)
+	fmt.Printf("Wrote %d CIDRs for %s -> %s\n", len(list), slug, path)
 	return "targets/" + slug + "-cidr.txt", nil
 }
 

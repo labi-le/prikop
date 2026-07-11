@@ -188,20 +188,22 @@ func ValidateIP(rawURL string, networks []*net.IPNet) error {
 	return fmt.Errorf("ip %v not in cidr ranges", ips)
 }
 
-func createHttpClient(proto types.Protocol, timeout time.Duration) (*http.Client, func()) {
+func createHttpClient(proto types.Protocol, timeout time.Duration, sni string) (*http.Client, func()) {
 	if proto == types.ProtoQUIC {
 		// http3.Transport holds live QUIC connections and must be closed after
 		// use (it cannot be reused post-Close), so callers create one per check
 		// and invoke the returned cleanup to avoid leaking connections/goroutines.
 		tr := &http3.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: sni},
 		}
 		return &http.Client{Transport: tr, Timeout: timeout}, func() { _ = tr.Close() }
 	}
 
-	// TCP Client — keepalive: false, redirect: follow (matches JS fetch defaults)
+	// TCP Client — keepalive: false, redirect: follow (matches JS fetch defaults).
+	// ServerName carries the intended SNI when the target is a raw IP; empty
+	// ServerName lets the transport default to the URL host (hostname targets).
 	tr := &http.Transport{
-		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true, ServerName: sni},
 		TLSHandshakeTimeout:   timeout,
 		ResponseHeaderTimeout: timeout,
 		DisableCompression:    true,
@@ -223,7 +225,7 @@ func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 	case types.ProtoSTUN:
 		return checkSTUN(ctx, t)
 	case types.ProtoTCP, types.ProtoQUIC:
-		client, cleanup := createHttpClient(t.Proto, t.Timeout)
+		client, cleanup := createHttpClient(t.Proto, t.Timeout, t.SNI)
 		defer cleanup()
 		return checkHTTPSequence(ctx, t, client)
 	default:
