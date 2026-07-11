@@ -133,9 +133,6 @@ func (m *Mutator) SmartMutate(s *nfqws.Strategy, feedback model.FailureReason) {
 		model.ReasonTLSVersion,
 		model.ReasonTLSCipherSuite, // <--- MITM: Сервер выбрал шифр, который клиент не предлагал
 		model.ReasonTLSDowngrade,
-		model.ReasonTLSCertUnknown,
-		model.ReasonTLSCertMismatch,
-		model.ReasonTLSCertExpired, // MITM: просроченный сертификат
 		model.ReasonTLSBadSignature,
 		model.ReasonTLSIllegalParam, // MITM: повреждение полей handshake
 		model.ReasonTLSSessionID:

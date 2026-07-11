@@ -74,8 +74,6 @@ const (
 	ReasonTLSVersion          FailureReason = "tls_version"           // Блокировка TLS 1.3 / downgrade attack
 	ReasonTLSNotTLS           FailureReason = "tls_not_tls"           // DPI вернул HTML-заглушку или мусор вместо ServerHello
 	ReasonTLSOversized        FailureReason = "tls_oversized"         // Oversized record — DPI склеил пакеты или plain-text ответ
-	ReasonTLSCertUnknown      FailureReason = "tls_cert_unknown"      // MITM — сертификат от неизвестного CA
-	ReasonTLSCertMismatch     FailureReason = "tls_cert_mismatch"     // MITM — имя в сертификате не совпадает
 	ReasonTLSBadMAC           FailureReason = "tls_bad_mac"           // DPI повредил MAC записи
 	ReasonTLSDecrypt          FailureReason = "tls_decrypt"           // Ошибка расшифровки сообщения
 	ReasonTLSDecode           FailureReason = "tls_decode"            // Ошибка декодирования TLS-сообщения (remote error: error decoding message)
@@ -89,7 +87,6 @@ const (
 	ReasonTLSCipherSuite      FailureReason = "tls_cipher_suite"      // Сервер выбрал cipher suite, который клиент не предлагал — MitM / broken middlebox
 	ReasonTLSRecordOverflow   FailureReason = "tls_record_overflow"   // TLS record overflow — DPI инжектировал данные или повредил запись
 	ReasonTLSIllegalParam     FailureReason = "tls_illegal_param"     // Illegal parameter в handshake — DPI подменил/повредил поле
-	ReasonTLSCertExpired      FailureReason = "tls_cert_expired"      // Сертификат истёк или ещё не валиден — MITM с просроченным сертификатом
 )
 
 func (r FailureReason) IsTLS() bool {

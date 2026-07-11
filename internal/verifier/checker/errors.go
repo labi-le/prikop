@@ -95,22 +95,6 @@ func AnalyzeError(err error) model.FailureReason {
 		return model.ReasonTLSOversized
 	}
 
-	// MITM
-	if strings.Contains(msg, "certificate signed by unknown authority") {
-		return model.ReasonTLSCertUnknown
-	}
-
-	// MITM: expired cert
-	if strings.Contains(msg, "certificate has expired or is not yet valid") {
-		return model.ReasonTLSCertExpired
-	}
-
-	// MITM: name mismatch
-	if strings.Contains(msg, "certificate is valid for") ||
-		strings.Contains(msg, "x509: certificate is not valid for any names") {
-		return model.ReasonTLSCertMismatch
-	}
-
 	// MITM: invalid signature
 	if strings.Contains(msg, "invalid signature") {
 		return model.ReasonTLSBadSignature
