@@ -38,6 +38,14 @@ const (
 	BlobDefaultQUIC = "fake_default_quic"
 )
 
+// Named blobs the worker declares from /app/fake so the genome can reference a
+// real google ClientHello as a fake payload or a seqovl overlap pattern — the
+// distinctive Zapret-Manager YouTube technique against googlevideo throttling.
+const (
+	BlobGoogleTLS  = "google_tls"
+	BlobGoogleQUIC = "google_quic"
+)
+
 // Valid reports the first action whose function is outside KnownFuncs, if any.
 // Used as a static correctness guard in tests and before dispatch.
 func (s Strategy) Valid() error {

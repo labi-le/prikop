@@ -17,6 +17,10 @@ import (
 func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, proto string) []nfqws2.Strategy {
 	if proto == "udp" {
 		pop := generateUDP()
+		// google QUIC ClientHello fake (YouTube video is delivered over HTTP/3).
+		pop = append(pop, udpStrat(nfqws2.Action{Func: "fake", Params: []nfqws2.Param{
+			nfqws2.P("blob", nfqws2.BlobGoogleQUIC), nfqws2.P("repeats", "6"),
+		}}))
 		if report.BadSumWorks {
 			// badsum-fooled QUIC fake: cheap corruption the DPI drops but the
 			// server ignores, when the recon proved bad checksums survive NAT.
@@ -30,6 +34,8 @@ func GenerateZeroGeneration(discoveredBins []string, report model.ReconReport, p
 	var pop []nfqws2.Strategy
 	// 1. Curated high-efficacy imports (the Yv series), translated to v2.
 	pop = append(pop, generateImportedStrategies()...)
+	// 1b. Google-ClientHello-blob variants (Zapret-Manager's YouTube technique).
+	pop = append(pop, generateGoogleBlobStrategies()...)
 	// 2. SNI-independent structural archetypes.
 	pop = append(pop, generateTCPStatic()...)
 	// 3. SNI/host-bearing archetypes, one per common target.
@@ -92,6 +98,18 @@ func split(fn, pos string, extra ...nfqws2.Param) nfqws2.Action {
 func fakeTLS(tlsMod string, extra ...nfqws2.Param) nfqws2.Action {
 	ps := make([]nfqws2.Param, 0, 2+len(extra))
 	ps = append(ps, nfqws2.P("blob", nfqws2.BlobDefaultTLS))
+	if tlsMod != "" {
+		ps = append(ps, nfqws2.P("tls_mod", tlsMod))
+	}
+	ps = append(ps, extra...)
+	return nfqws2.Action{Func: "fake", Params: ps}
+}
+
+// fakeTLSBlob builds a TCP fake action using a specific declared blob instead of
+// the default TLS blob (e.g. a real google ClientHello for SNI-overlap fakes).
+func fakeTLSBlob(blob, tlsMod string, extra ...nfqws2.Param) nfqws2.Action {
+	ps := make([]nfqws2.Param, 0, 2+len(extra))
+	ps = append(ps, nfqws2.P("blob", blob))
 	if tlsMod != "" {
 		ps = append(ps, nfqws2.P("tls_mod", tlsMod))
 	}
@@ -206,6 +224,40 @@ func generateImportedStrategies() []nfqws2.Strategy {
 		tcpStrat(
 			fakeTLS("", nfqws2.P("repeats", "8"), nfqws2.Flag("tcp_ts_up"), nfqws2.P("ip_id", "zero")),
 			split("multisplit", "1", nfqws2.P("seqovl", "681")),
+		),
+	}
+}
+
+// generateGoogleBlobStrategies restores Zapret-Manager's distinctive YouTube
+// technique that generateImportedStrategies drops: overlapping the split with a
+// real google ClientHello (seqovl_pattern) and/or faking one. These are the
+// strategies that beat TSPU throttling on the googlevideo CDN edges.
+func generateGoogleBlobStrategies() []nfqws2.Strategy {
+	g := nfqws2.BlobGoogleTLS
+	return []nfqws2.Strategy{
+		// Yv01: multisplit pos=1 seqovl=681 pattern=google-CH, ip_id=zero
+		tcpStrat(split("multisplit", "1", nfqws2.P("seqovl", "681"), nfqws2.P("seqovl_pattern", g), nfqws2.P("ip_id", "zero"))),
+		// Yv04: split2 -> multisplit pos=1 seqovl=681 pattern=google-CH
+		tcpStrat(split("multisplit", "1", nfqws2.P("seqovl", "681"), nfqws2.P("seqovl_pattern", g))),
+		// Yv21: fake google-CH + multisplit seqovl=681 pattern=google-CH, ts, repeats
+		tcpStrat(
+			fakeTLSBlob(g, "", nfqws2.P("repeats", "8"), nfqws2.Flag("tcp_ts_up"), nfqws2.P("ip_id", "zero")),
+			split("multisplit", "1", nfqws2.P("seqovl", "681"), nfqws2.P("seqovl_pattern", g)),
+		),
+		// Yv13: fake fonts google-CH + multidisorder seqovl=681 pattern=google-CH
+		tcpStrat(
+			fakeTLSBlob(g, "rnd,dupsid,sni=fonts.google.com", nfqws2.P("repeats", "2")),
+			split("multidisorder", "1", nfqws2.P("seqovl", "681"), nfqws2.P("seqovl_pattern", g)),
+		),
+		// Yv14: fake fonts google-CH + multidisorder pos=10,midsld seqovl=336 pattern=google-CH
+		tcpStrat(
+			fakeTLSBlob(g, "rnd,dupsid,sni=fonts.google.com"),
+			split("multidisorder", "10,midsld", nfqws2.P("seqovl", "336"), nfqws2.P("seqovl_pattern", g)),
+		),
+		// Yv15: fake ggpht google-CH + multisplit pos=2,sld seqovl=2108 pattern=google-CH, badsum
+		tcpStrat(
+			fakeTLSBlob(g, "rnd,dupsid,sni=ggpht.com", nfqws2.Flag("badsum")),
+			split("multisplit", "2,sld", nfqws2.P("seqovl", "2108"), nfqws2.P("seqovl_pattern", g)),
 		),
 	}
 }

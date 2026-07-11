@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"prikop/internal/model"
+	"prikop/internal/nfqws2"
 	"syscall"
 )
 
@@ -43,6 +44,9 @@ func StartNFQWS(args []string) (*exec.Cmd, *bytes.Buffer) {
 		"--qnum=" + model.QueueNum,
 		"--lua-init=@/app/lua/zapret-lib.lua",
 		"--lua-init=@/app/lua/zapret-antidpi.lua",
+		// Named blobs the genome may reference (google ClientHello / QUIC Initial).
+		"--blob=" + nfqws2.BlobGoogleTLS + ":@/app/fake/tls_clienthello_www_google_com.bin",
+		"--blob=" + nfqws2.BlobGoogleQUIC + ":@/app/fake/quic_initial_www_google_com.bin",
 	}, args...)
 
 	cmd := exec.Command("/usr/bin/nfqws2", finalArgs...)

@@ -81,11 +81,11 @@ var (
 	// Blob pools: only default named blobs or 0xHEX literals are allowed (no
 	// /app/fake/*.bin file paths yet, per the migration contract).
 	tlsBlobs = []string{
-		nfqws2.BlobDefaultTLS,
+		nfqws2.BlobDefaultTLS, nfqws2.BlobGoogleTLS,
 		"0x1603010200010000", "0x160301", "0x16030100",
 	}
 	quicBlobs = []string{
-		nfqws2.BlobDefaultQUIC,
+		nfqws2.BlobDefaultQUIC, nfqws2.BlobGoogleQUIC,
 		"0xc00000000108", "0xcd0000000108",
 	}
 	tlsMods = []string{"rnd", "rndsni", "rnd,dupsid", "dupsid", "padencap", ""}
