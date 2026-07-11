@@ -188,31 +188,30 @@ func ValidateIP(rawURL string, networks []*net.IPNet) error {
 	return fmt.Errorf("ip %v not in cidr ranges", ips)
 }
 
-func createHttpClient(proto types.Protocol, timeout time.Duration) *http.Client {
+func createHttpClient(proto types.Protocol, timeout time.Duration) (*http.Client, func()) {
 	if proto == types.ProtoQUIC {
-		return &http.Client{
-			Transport: &http3.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-			Timeout: timeout,
+		// http3.Transport holds live QUIC connections and must be closed after
+		// use (it cannot be reused post-Close), so callers create one per check
+		// and invoke the returned cleanup to avoid leaking connections/goroutines.
+		tr := &http3.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
+		return &http.Client{Transport: tr, Timeout: timeout}, func() { _ = tr.Close() }
 	}
 
 	// TCP Client — keepalive: false, redirect: follow (matches JS fetch defaults)
-	return &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
-			TLSHandshakeTimeout:   timeout,
-			ResponseHeaderTimeout: timeout,
-			DisableCompression:    true,
-			DisableKeepAlives:     true,
-			MaxIdleConnsPerHost:   -1,
-			DialContext: (&net.Dialer{
-				Timeout: timeout,
-			}).DialContext,
-		},
-		Timeout: timeout,
+	tr := &http.Transport{
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		TLSHandshakeTimeout:   timeout,
+		ResponseHeaderTimeout: timeout,
+		DisableCompression:    true,
+		DisableKeepAlives:     true,
+		MaxIdleConnsPerHost:   -1,
+		DialContext: (&net.Dialer{
+			Timeout: timeout,
+		}).DialContext,
 	}
+	return &http.Client{Transport: tr, Timeout: timeout}, tr.CloseIdleConnections
 }
 
 func dispatchCheck(ctx context.Context, t types.Target) checkResult {
@@ -224,7 +223,8 @@ func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 	case types.ProtoSTUN:
 		return checkSTUN(ctx, t)
 	case types.ProtoTCP, types.ProtoQUIC:
-		client := createHttpClient(t.Proto, t.Timeout)
+		client, cleanup := createHttpClient(t.Proto, t.Timeout)
+		defer cleanup()
 		return checkHTTPSequence(ctx, t, client)
 	default:
 		return failResult(model.ReasonUnknown, "unsupported protocol")
