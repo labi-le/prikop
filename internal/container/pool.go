@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"prikop/internal/model"
+	"strings"
 	"sync"
 	"time"
 
@@ -166,7 +167,19 @@ func (p *WorkerPool) spawnWorker(name, id, socketPath string) (*Worker, error) {
 		},
 	}
 
+	// A just-crashed worker still has AutoRemove in flight, so recreating it on
+	// respawn can race that async removal and fail with "name already in use".
+	// Retry create (re-removing each time) until Docker frees the name.
 	resp, err := p.cli.ContainerCreate(p.ctx, createOpts)
+	for attempt := 0; err != nil && attempt < 25 && strings.Contains(err.Error(), "already in use"); attempt++ {
+		select {
+		case <-p.ctx.Done():
+			return nil, p.ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+		_, _ = p.cli.ContainerRemove(p.ctx, name, client.ContainerRemoveOptions{Force: true})
+		resp, err = p.cli.ContainerCreate(p.ctx, createOpts)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
 	}
