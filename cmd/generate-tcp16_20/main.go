@@ -1,12 +1,11 @@
-// Command generate-tcp16_20 fetches the DPI checker suite from
-// https://github.com/hyperion-cs/dpi-checkers and generates a single Go file
-// tcp16_20_generated.go inside internal/verifier/tcp16_20.
+// Command generate-tcp16_20 fetches the DPI-detector suite (IP endpoints per
+// hosting provider) and generates suite_v1_generated.go plus a per-provider
+// ipset file (targets/<slug>-cidr.txt) containing the exact test IPs as /32.
 //
 // Usage:
 //
 //	go run ./cmd/generate-tcp16_20
-//	go run ./cmd/generate-tcp16_20 -url <url>
-//	go run ./cmd/generate-tcp16_20 -out <path>
+//	go run ./cmd/generate-tcp16_20 -url <url> -out <path> -gens <n>
 package main
 
 import (
@@ -30,16 +29,19 @@ import (
 var tmplFS embed.FS
 
 const (
-	defaultSuiteURL   = "https://raw.githubusercontent.com/hyperion-cs/dpi-checkers/refs/heads/main/ru/tcp-16-20/suite.v2.json"
+	defaultSuiteURL   = "https://raw.githubusercontent.com/Runnin4ik/dpi-detector/refs/heads/main/tcp16.json"
 	defaultOutputFile = "internal/verifier/tcp16_20/suite_v1_generated.go"
+	defaultThreshold  = 64 * 1024 // 64KB per the dpi-checkers algorithm
 )
 
-// SuiteEntryV2 represents the v2 suite schema
-type SuiteEntryV2 struct {
+// SuiteEntry is one endpoint in the DPI-detector suite.
+type SuiteEntry struct {
 	ID       string `json:"id"`
+	ASN      string `json:"asn"`
 	Provider string `json:"provider"`
-	Country  string `json:"country"`
-	Host     string `json:"host"`
+	IP       string `json:"ip"`
+	Port     int    `json:"port"`
+	SNI      string `json:"sni"`
 }
 
 type templateTarget struct {
@@ -61,35 +63,15 @@ type templateData struct {
 	Providers []templateProvider
 }
 
-var cidrSources = map[string]string{
-	"akamai":       "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/akamai/akamai_plain_ipv4.txt",
-	"aws":          "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/aws/aws_plain_ipv4.txt",
-	"cdn77":        "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/cdn77/cdn77_plain_ipv4.txt",
-	"cloudflare":   "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/cloudflare/cloudflare_plain_ipv4.txt",
-	"contabo":      "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/contabo/contabo_plain_ipv4.txt",
-	"digitalocean": "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/digitalocean/digitalocean_plain_ipv4.txt",
-	"fastly":       "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/fastly/fastly_plain_ipv4.txt",
-	"gcore":        "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/gcore/gcore_plain_ipv4.txt",
-	"googlecloud":  "https://www.gstatic.com/ipranges/cloud.json",
-	"hetzner":      "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/hetzner/hetzner_plain_ipv4.txt",
-	"melbicom":     "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/melbicom/melbicom_plain_ipv4.txt",
-	"oracle":       "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/oracle/oracle_plain_ipv4.txt",
-	"ovh":          "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/ovh/ovh_plain_ipv4.txt",
-	"scaleway":     "https://raw.githubusercontent.com/123jjck/cdn-ip-ranges/refs/heads/main/scaleway/scaleway_plain_ipv4.txt",
-	"vultr":        "https://raw.githubusercontent.com/rezmoss/cloud-provider-ip-addresses/refs/heads/main/vultr/vultr_ips_merged_v4.txt",
-}
-
 func main() {
-	var suiteURL string
-	var outputFile string
+	var suiteURL, outputFile string
 	var gens int
-
-	flag.StringVar(&suiteURL, "url", defaultSuiteURL, "suite.v2.json URL")
+	flag.StringVar(&suiteURL, "url", defaultSuiteURL, "suite json URL")
 	flag.StringVar(&outputFile, "out", defaultOutputFile, "output file path")
 	flag.IntVar(&gens, "gens", 3, "number of generations")
 	flag.Parse()
 
-	entries, err := fetchSuiteV2(suiteURL)
+	entries, err := fetchSuite(suiteURL)
 	if err != nil {
 		fatal("fetching suite: %v", err)
 	}
@@ -111,59 +93,89 @@ func main() {
 
 	formatted, err := format.Source(buf.Bytes())
 	if err != nil {
-		_ = os.WriteFile(outputFile+".broken", buf.Bytes(), 0644)
+		_ = os.WriteFile(outputFile+".broken", buf.Bytes(), 0o644)
 		fatal("gofmt: %v (unformatted source saved to %s.broken)", err, outputFile)
 	}
 
-	if err := os.WriteFile(outputFile, formatted, 0644); err != nil {
+	if err := os.WriteFile(outputFile, formatted, 0o644); err != nil {
 		fatal("writing file: %v", err)
 	}
 
-	fmt.Printf("Generated %s (%d providers, %d targets)\n",
-		outputFile, len(data.Providers), len(entries))
+	fmt.Printf("Generated %s (%d providers, %d endpoints)\n", outputFile, len(data.Providers), len(entries))
 }
 
-const defaultThreshold = 64 * 1024 // 64KB as per dpi-checkers algorithm
+// baseSlug normalizes a granular provider name ("Hetzner Cloud 2",
+// "Akamai 1 HTTP", "CDN77 #1", "Google Cloud") to a stable base slug used for
+// grouping and ipset file names.
+func baseSlug(provider string) string {
+	fields := strings.Fields(provider)
+	if len(fields) == 0 {
+		return "unknown"
+	}
+	first := strings.ToLower(fields[0])
+	// "Google Cloud" is the only two-word base name in the suite.
+	if first == "google" && len(fields) > 1 && strings.ToLower(fields[1]) == "cloud" {
+		return "googlecloud"
+	}
+	return first
+}
 
-func buildTemplateData(entries []SuiteEntryV2, gens int) (templateData, error) {
-	// Group by provider slug
-	grouped := make(map[string][]SuiteEntryV2)
+// targetURL builds the check URL from an IP and port.
+func targetURL(ip string, port int) string {
+	switch port {
+	case 0, 443:
+		return "https://" + ip + "/"
+	case 80:
+		return "http://" + ip + "/"
+	default:
+		return fmt.Sprintf("https://%s:%d/", ip, port)
+	}
+}
+
+func buildTemplateData(entries []SuiteEntry, gens int) (templateData, error) {
+	grouped := make(map[string][]SuiteEntry)
 	for _, e := range entries {
-		slug := strings.ToLower(strings.ReplaceAll(e.Provider, " ", "-"))
+		if e.IP == "" {
+			continue
+		}
+		slug := baseSlug(e.Provider)
 		grouped[slug] = append(grouped[slug], e)
 	}
 
-	names := sortedKeysV2(grouped)
+	slugs := make([]string, 0, len(grouped))
+	for s := range grouped {
+		slugs = append(slugs, s)
+	}
+	sort.Strings(slugs)
+
 	var provs []templateProvider
+	for _, slug := range slugs {
+		list := grouped[slug]
 
-	for _, slug := range names {
-		entryList := grouped[slug]
 		var targets []templateTarget
-
-		for _, e := range entryList {
-			// Construct full URL from host
-			url := "https://" + e.Host + "/"
+		seen := make(map[string]struct{})
+		var ips []string
+		for _, e := range list {
 			targets = append(targets, templateTarget{
 				ID:        e.ID,
-				URL:       url,
+				URL:       targetURL(e.IP, e.Port),
 				Threshold: defaultThreshold,
 			})
+			if _, ok := seen[e.IP]; !ok {
+				seen[e.IP] = struct{}{}
+				ips = append(ips, e.IP)
+			}
 		}
 
-		cidrFile := ""
-		if cidrURL, ok := cidrSources[slug]; ok {
-			var err error
-			cidrFile, err = downloadAndSaveCIDRs(slug, cidrURL)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: downloading CIDRs for %s: %v (skipping)\n", slug, err)
-				cidrFile = ""
-			}
+		cidrFile, err := writeIPSet(slug, ips)
+		if err != nil {
+			return templateData{}, fmt.Errorf("writing ipset for %s: %w", slug, err)
 		}
 
 		provs = append(provs, templateProvider{
 			Name:     slug,
 			Slug:     slug,
-			CIDR:     cidrSources[slug],
+			CIDR:     "", // ipset is built from the suite's exact IPs
 			CIDRFile: cidrFile,
 			Targets:  targets,
 			Gens:     gens,
@@ -173,16 +185,35 @@ func buildTemplateData(entries []SuiteEntryV2, gens int) (templateData, error) {
 	return templateData{Providers: provs}, nil
 }
 
-func sortedKeysV2(m map[string][]SuiteEntryV2) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+// writeIPSet writes the provider's test IPs as /32 CIDRs to
+// targets/<slug>-cidr.txt and returns the project-relative path.
+func writeIPSet(slug string, ips []string) (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
 	}
-	sort.Strings(keys)
-	return keys
+	// go:generate runs in internal/verifier/tcp16_20; project root is 3 up.
+	targetsDir := filepath.Join(wd, "..", "..", "..", "targets")
+	if err := os.MkdirAll(targetsDir, 0o755); err != nil {
+		return "", err
+	}
+
+	sort.Strings(ips)
+	var b strings.Builder
+	for _, ip := range ips {
+		b.WriteString(ip)
+		b.WriteString("/32\n")
+	}
+
+	path := filepath.Join(targetsDir, slug+"-cidr.txt")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", err
+	}
+	fmt.Printf("Wrote %d IPs for %s -> %s\n", len(ips), slug, path)
+	return "targets/" + slug + "-cidr.txt", nil
 }
 
-func fetchSuiteV2(url string) ([]SuiteEntryV2, error) {
+func fetchSuite(url string) ([]SuiteEntry, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -199,7 +230,7 @@ func fetchSuiteV2(url string) ([]SuiteEntryV2, error) {
 		return nil, err
 	}
 
-	var entries []SuiteEntryV2
+	var entries []SuiteEntry
 	if err := json.Unmarshal(body, &entries); err != nil {
 		return nil, err
 	}
@@ -209,109 +240,4 @@ func fetchSuiteV2(url string) ([]SuiteEntryV2, error) {
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "generate-tcp16_20: "+format+"\n", args...)
 	os.Exit(1)
-}
-
-// downloadAndSaveCIDRs downloads CIDRs from URL and saves to targets/<slug>-cidr.txt
-// Returns relative path from project root (e.g. "targets/aws-cidr.txt")
-func downloadAndSaveCIDRs(slug, url string) (string, error) {
-	// Get the directory where the generated file will be placed
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("getting working directory: %w", err)
-	}
-
-	// Navigate from internal/verifier/tcp16_20 to project root
-	projectRoot := filepath.Join(wd, "..", "..", "..")
-	targetsDir := filepath.Join(projectRoot, "targets")
-
-	if err := os.MkdirAll(targetsDir, 0755); err != nil {
-		return "", fmt.Errorf("creating targets directory: %w", err)
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	cidrs, err := parseCIDRs(body)
-	if err != nil {
-		return "", err
-	}
-
-	filePath := filepath.Join(targetsDir, slug+"-cidr.txt")
-	f, err := os.Create(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	for _, cidr := range cidrs {
-		if _, err := f.WriteString(cidr + "\n"); err != nil {
-			return "", err
-		}
-	}
-
-	fmt.Printf("Downloaded %d CIDRs for %s -> %s\n", len(cidrs), slug, filePath)
-	return "targets/" + slug + "-cidr.txt", nil
-}
-
-func parseCIDRs(body []byte) ([]string, error) {
-	type fastlyResp struct {
-		Addresses     []string `json:"addresses"`
-		IPv6Addresses []string `json:"ipv6_addresses"`
-	}
-	type googlePrefix struct {
-		IPv4Prefix string `json:"ipv4Prefix"`
-	}
-	type googleResp struct {
-		Prefixes []googlePrefix `json:"prefixes"`
-	}
-
-	trimmed := strings.TrimSpace(string(body))
-	if strings.HasPrefix(trimmed, "{") {
-		var gResp googleResp
-		if err := json.Unmarshal(body, &gResp); err == nil && len(gResp.Prefixes) > 0 {
-			var result []string
-			for _, p := range gResp.Prefixes {
-				if p.IPv4Prefix != "" {
-					result = append(result, p.IPv4Prefix)
-				}
-			}
-			return result, nil
-		}
-
-		var fResp fastlyResp
-		if err := json.Unmarshal(body, &fResp); err == nil && len(fResp.Addresses) > 0 {
-			return fResp.Addresses, nil
-		}
-	}
-
-	lines := strings.Split(string(body), "\n")
-	var result []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if strings.Contains(line, ".") {
-			result = append(result, line)
-		}
-	}
-
-	if len(result) == 0 {
-		return nil, fmt.Errorf("no valid IPv4 CIDRs found")
-	}
-
-	return result, nil
 }
