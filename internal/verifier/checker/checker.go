@@ -27,6 +27,9 @@ const (
 	DefaultTimeout = 15 * time.Second
 	// JS: const DPI_THR_BYTES = 64 * 1024;
 	PostPayloadSize = 64 * 1024
+	// DownloadCheck must pull at least this many bytes to count as a real
+	// transfer, so a redirect stub or tiny error page can't pass as a download.
+	DownloadMinBytes = 32 * 1024
 
 	UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
@@ -179,7 +182,13 @@ func ValidateIP(rawURL string, networks []*net.IPNet) error {
 	return fmt.Errorf("ip %v not in cidr ranges", ips)
 }
 
-func createHttpClient(proto types.Protocol, timeout time.Duration, sni string) (*http.Client, func()) {
+func createHttpClient(proto types.Protocol, timeout time.Duration, sni string, noRedirect bool) (*http.Client, func()) {
+	// noRedirect keeps the test on the target's own SNI instead of following a
+	// 30x to another origin (see Target.NoRedirect).
+	var checkRedirect func(*http.Request, []*http.Request) error
+	if noRedirect {
+		checkRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	}
 	if proto == types.ProtoQUIC {
 		// http3.Transport holds live QUIC connections and must be closed after
 		// use (it cannot be reused post-Close), so callers create one per check
@@ -187,7 +196,7 @@ func createHttpClient(proto types.Protocol, timeout time.Duration, sni string) (
 		tr := &http3.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: sni},
 		}
-		return &http.Client{Transport: tr, Timeout: timeout}, func() { _ = tr.Close() }
+		return &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, func() { _ = tr.Close() }
 	}
 
 	// TCP Client — keepalive: false, redirect: follow (matches JS fetch defaults).
@@ -204,7 +213,7 @@ func createHttpClient(proto types.Protocol, timeout time.Duration, sni string) (
 			Timeout: timeout,
 		}).DialContext,
 	}
-	return &http.Client{Transport: tr, Timeout: timeout}, tr.CloseIdleConnections
+	return &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: checkRedirect}, tr.CloseIdleConnections
 }
 
 func dispatchCheck(ctx context.Context, t types.Target) checkResult {
@@ -214,7 +223,7 @@ func dispatchCheck(ctx context.Context, t types.Target) checkResult {
 
 	switch t.Proto {
 	case types.ProtoTCP, types.ProtoQUIC:
-		client, cleanup := createHttpClient(t.Proto, t.Timeout, t.SNI)
+		client, cleanup := createHttpClient(t.Proto, t.Timeout, t.SNI, t.NoRedirect)
 		defer cleanup()
 		return checkHTTPSequence(ctx, t, client)
 	default:
@@ -271,6 +280,12 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 		alive = true
 	}
 
+	// --- Download-completion check (package caches): the DPI step is a real GET
+	// whose body must fully arrive, catching response-side throttling. ---
+	if t.DownloadCheck {
+		return checkDownload(ctx, t, client, alive)
+	}
+
 	// --- Step 2: DPI Check (POST 64 KiB) ---
 	dpiURL := getUniqueURL(t.URL)
 
@@ -308,6 +323,59 @@ func checkHTTPSequence(ctx context.Context, t types.Target, client *http.Client)
 	io.Copy(io.Discard, respPost.Body)
 
 	// JS: POST completes without error → not detected ✅ (PASS)
+	return okResult
+}
+
+// checkDownload GETs the target and requires the entire response body to reach
+// EOF within the client timeout (and, if Target.MinSpeed is set, at that rate).
+// A body that starts then stalls before EOF is the download-throttle that the
+// HEAD/handshake and the 64 KiB POST (an upload) are blind to — the exact
+// failure that leaves package caches "dead" (bytes trickle, never complete).
+func checkDownload(ctx context.Context, t types.Target, client *http.Client, alive bool) checkResult {
+	req, err := http.NewRequestWithContext(ctx, "GET", getUniqueURL(t.URL), nil)
+	if err != nil {
+		return failResult(model.ReasonUnknown, err.Error())
+	}
+	setCommonHeaders(req)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		reason := AnalyzeError(err)
+		if reason == model.ReasonTimeout {
+			if alive {
+				return failResult(model.ReasonThrottle, "GET headers timed out (DPI detected): "+err.Error())
+			}
+			return failResult(model.ReasonSkip, "GET timeout with dead HEAD (probably detected)")
+		}
+		return failResult(reason, "GET failed: "+err.Error())
+	}
+	defer resp.Body.Close()
+	final := resp.Request.URL.Host // host actually measured (after any redirects)
+
+	start := time.Now()
+	n, cerr := io.Copy(io.Discard, resp.Body)
+	elapsed := time.Since(start)
+
+	if cerr != nil {
+		// Body began but stalled/reset before EOF within the deadline: the
+		// download-throttle (discord died ~2.7 KB, chaotic ~7.6 KB, then trickled).
+		return failResult(model.ReasonThrottle, fmt.Sprintf("download stalled after %d bytes in %v on %s: %v", n, elapsed, final, cerr))
+	}
+
+	floor := int64(DownloadMinBytes)
+	if t.Threshold > 0 && int64(t.Threshold) < floor {
+		floor = int64(t.Threshold)
+	}
+	if n < floor {
+		return failResult(model.ReasonSkip, fmt.Sprintf("download too small (%d < %d bytes) — likely stub/redirect, inconclusive", n, floor))
+	}
+
+	if t.MinSpeed > 0 && elapsed > 0 {
+		if bps := float64(n) / elapsed.Seconds(); bps < t.MinSpeed {
+			return failResult(model.ReasonThrottle, fmt.Sprintf("download too slow on %s: %.0f < %.0f B/s (%d bytes / %v)", final, bps, t.MinSpeed, n, elapsed))
+		}
+	}
+
 	return okResult
 }
 

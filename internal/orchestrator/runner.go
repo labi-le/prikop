@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"prikop/internal/container"
+	"prikop/internal/evolution"
 	"prikop/internal/model"
 	"prikop/internal/nfqws2"
 	"prikop/internal/scout"
@@ -26,8 +27,10 @@ import (
 )
 
 type Config struct {
-	FakePath string
-	Provider string
+	FakePath   string
+	Provider   string
+	Seed       uint64
+	ReportPath string
 }
 
 type config struct {
@@ -53,6 +56,11 @@ func Run(cfg Config, log zerolog.Logger) {
 	if cfg.Provider == voiceProvider {
 		runVoiceCapture(ctx, log)
 		return
+	}
+
+	if cfg.Seed != 0 {
+		evolution.SetSeed(cfg.Seed)
+		log.Info().Uint64("seed", cfg.Seed).Msg("Deterministic RNG seed set for evolution")
 	}
 
 	cli, err := client.New(client.FromEnv)
@@ -148,8 +156,21 @@ func Run(cfg Config, log zerolog.Logger) {
 	}
 	log.Info().Msg("Startup validation passed successfully")
 
-	optimizer := NewOptimizer(pool, log.With().Str("component", "optimizer").Logger())
+	var reporter *Reporter
+	if cfg.ReportPath != "" {
+		reporter = NewReporter()
+	}
+
+	optimizer := NewOptimizer(pool, log.With().Str("component", "optimizer").Logger(), reporter)
 	runProviders(ctx, optimizer, allProviders, discoveredBins, report, log)
+
+	if reporter != nil {
+		if err := reporter.Write(cfg.ReportPath); err != nil {
+			log.Error().Err(err).Str("path", cfg.ReportPath).Msg("Failed to write run report")
+		} else {
+			log.Info().Str("path", cfg.ReportPath).Msg("Wrote run report")
+		}
+	}
 }
 
 const voiceProvider = "discord_voice"
@@ -210,6 +231,7 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 		Filters  string
 		Provider string
 	}
+	var noBypass []string // providers already reachable without any desync
 
 	sem := make(chan struct{}, model.MaxConcurrentProviders)
 	var wg sync.WaitGroup
@@ -251,9 +273,29 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 				return
 			}
 
-			if best != nil && best.Result.SuccessCount > 0 && float64(best.Result.SuccessCount)/float64(best.Result.TotalCount) >= 0.5 {
+			proto := p.Proto
+			if proto == "" {
+				proto = "tcp"
+			}
+
+			switch {
+			case best == nil:
+				provLogger.Warn().Msg("Provider failed: No working strategy found")
+				opt.reporter.recordOutcome(p.Name, proto, p.Filters, "no_strategy", "")
+
+			case best.Baseline:
+				// Target already reachable unassisted — deploying a desync here can
+				// make the DPI flag+throttle an open connection (chaotic/garuda lesson).
+				provLogger.Info().Msg("Reachable WITHOUT bypass — no strategy deployed")
+				opt.reporter.recordOutcome(p.Name, proto, p.Filters, "reachable_without_bypass", "")
+				mu.Lock()
+				noBypass = append(noBypass, p.Name)
+				mu.Unlock()
+
+			case best.Result.SuccessCount > 0 && float64(best.Result.SuccessCount)/float64(best.Result.TotalCount) >= 0.5:
 				strategyArgs := best.Config.String()
 				provLogger.Info().Str("winner", strategyArgs).Msg("Provider finished with a winning strategy")
+				opt.reporter.recordOutcome(p.Name, proto, p.Filters, "winner", strategyArgs)
 
 				// Try to cast back to Strategy to update global best
 				if s, ok := best.Config.(nfqws2.Strategy); ok {
@@ -281,8 +323,10 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 					Provider: p.Name,
 				})
 				mu.Unlock()
-			} else {
+
+			default:
 				provLogger.Warn().Msg("Provider failed: No working strategy found")
+				opt.reporter.recordOutcome(p.Name, proto, p.Filters, "no_strategy", "")
 			}
 		}(p)
 	}
@@ -291,6 +335,19 @@ func runProviders(ctx context.Context, opt *Optimizer, providers []types.Provide
 
 	finalConfigs := optimizeStrategies(rawConfigs)
 	printFinalConfig(finalConfigs)
+
+	if len(noBypass) > 0 {
+		sort.Strings(noBypass)
+		fmt.Println("# Reachable without bypass (no strategy needed):")
+		for _, name := range noBypass {
+			fmt.Printf("#   - %s\n", name)
+		}
+		fmt.Println()
+	}
+
+	if len(rawConfigs) == 0 && len(noBypass) == 0 {
+		fmt.Println("# No working strategies found.")
+	}
 }
 
 // optimizeStrategies merges duplicate strategies across providers
@@ -352,7 +409,6 @@ func printFinalConfig(configs []config) {
 	fmt.Println()
 
 	if len(configs) == 0 {
-		fmt.Println("# No working strategies found.")
 		return
 	}
 

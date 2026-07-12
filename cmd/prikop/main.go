@@ -19,6 +19,8 @@ func main() {
 	var cfg orchestrator.Config
 	flag.StringVar(&cfg.FakePath, "fake-path", "/app/fake", "Path to bins")
 	flag.StringVar(&cfg.Provider, "provider", "", "Run only these providers, comma-separated (e.g. discord_gateway,discord_api or google_tcp)")
+	flag.Uint64Var(&cfg.Seed, "seed", 0, "Deterministic RNG seed for evolution (0 = time-random)")
+	flag.StringVar(&cfg.ReportPath, "report", "", "Write per-generation GA results as JSON to this path")
 
 	flag.Parse()
 

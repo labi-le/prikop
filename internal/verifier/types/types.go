@@ -50,8 +50,18 @@ type Target struct {
 	// (the site opens) and skip the 64 KiB POST. For targets the app only needs
 	// to reach, where the POST models an upload the DPI throttles independently.
 	HandshakeOnly bool
-	MinSpeed      float64
-	Timeout       time.Duration
+	// DownloadCheck makes the DPI step a real GET that must stream the full
+	// response body to EOF within Timeout (and, if set, at >= MinSpeed). It
+	// catches response-side download-throttling — a body that starts then
+	// stalls — which the HEAD/handshake and the 64 KiB POST (an upload) cannot
+	// see. Use it for package caches where completing a large download IS the goal.
+	DownloadCheck bool
+	// NoRedirect stops the checker following HTTP redirects, so the test stays on
+	// the target's own SNI instead of silently measuring a redirect destination
+	// (e.g. a mirror 30x-ing to a different origin). Default follows redirects.
+	NoRedirect bool
+	MinSpeed   float64
+	Timeout    time.Duration
 }
 
 type ProviderDefinition struct {

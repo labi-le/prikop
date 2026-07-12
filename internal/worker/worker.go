@@ -70,6 +70,14 @@ func RunWorkerServer(ctx context.Context, socketPath string, log zerolog.Logger)
 }
 
 func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult {
+	if req.Baseline {
+		// No desync: the request loop already ran Cleanup() (no iptables NFQUEUE,
+		// no nfqws left over), so we just measure the target as-is. This lets the
+		// orchestrator tell "already works" from "strategy fixed it" and never
+		// recommend a strategy that degrades an already-open target.
+		return runChecks(req, log)
+	}
+
 	if err := SetupIptables(req.TargetGroup); err != nil {
 		return model.WorkerResult{Error: fmt.Sprintf("iptables: %v", err)}
 	}
@@ -106,12 +114,18 @@ func executeTest(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult
 	default:
 	}
 
+	return runChecks(req, log)
+}
+
+// runChecks builds the group verifier and runs it under the check timeout,
+// mapping the verifier result to a WorkerResult. Shared by the baseline path
+// (no desync) and the normal path (after nfqws is up).
+func runChecks(req model.WorkerRequest, log zerolog.Logger) model.WorkerResult {
 	v := verifier.NewVerifier(req.TargetGroup, log)
 	vCtx, cancel := context.WithTimeout(context.Background(), model.CheckTimeout)
 	defer cancel()
 
 	checkRes := v.Run(vCtx, req.MaxTargets)
-
 	return model.WorkerResult{
 		Success:      checkRes.Success,
 		FailureType:  checkRes.FailureReason,

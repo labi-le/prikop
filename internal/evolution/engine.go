@@ -1,7 +1,6 @@
 package evolution
 
 import (
-	"math/rand/v2"
 	"sort"
 
 	"prikop/internal/model"
@@ -99,7 +98,7 @@ func Evolve(results []model.ScoredStrategy, globalBest *model.ScoredStrategy, di
 
 	if len(bestParents) > 0 {
 		for range slotsRemaining {
-			parent := bestParents[rand.IntN(len(bestParents))]
+			parent := bestParents[rng.IntN(len(bestParents))]
 			if s, ok := parent.Config.(nfqws2.Strategy); ok {
 				child := s.Clone() // deep copy: never share Param slices with the parent
 				mutations := 1

@@ -23,6 +23,10 @@ type WorkerRequest struct {
 	Filters      []string `json:"filters"`
 	TargetGroup  string   `json:"target_group"`
 	MaxTargets   int      `json:"max_targets"` // 0 means all
+	// Baseline requests a no-desync measurement: the worker skips iptables/nfqws
+	// and checks the target as-is. Lets the orchestrator tell "already works"
+	// from "strategy fixed it" and refuse strategies that degrade an open target.
+	Baseline bool `json:"baseline,omitempty"`
 }
 
 // StrategyConfig — это интерфейс, который должна реализовать стратегия NFQWS
@@ -50,6 +54,9 @@ type ScoredStrategy struct {
 	Result     WorkerResult
 	SystemLogs string
 	Complexity int
+	// Baseline marks a "no strategy needed" verdict: the target already passed
+	// the no-desync baseline, so RunPhase returns this instead of a strategy.
+	Baseline bool
 }
 
 // ReconReport holds the results of the active reconnaissance phase

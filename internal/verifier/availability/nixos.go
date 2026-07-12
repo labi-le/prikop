@@ -28,7 +28,7 @@ func init() {
 		SuccessThreshold: 1.0,
 		Filters:          "--filter-tcp=443 --hostlist-domains=cache.nixos.org",
 		Targets: []types.Target{
-			{URL: "https://cache.nixos.org/nar/0cr6df6dl4y8sp6nmnmpfhhzbqrnawm504sszisfxh1yi05jhigb.nar.zst", Threshold: 1638786, IgnoreStatus: true, Proto: types.ProtoTCP, ID: "NIX-01"},
+			{URL: "https://cache.nixos.org/nar/0cr6df6dl4y8sp6nmnmpfhhzbqrnawm504sszisfxh1yi05jhigb.nar.zst", Threshold: 1638786, IgnoreStatus: true, DownloadCheck: true, Proto: types.ProtoTCP, ID: "NIX-01"},
 		},
 	})
 }

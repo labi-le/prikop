@@ -22,16 +22,23 @@ const (
 	MaxComplexityTCP = 6
 	MaxComplexityUDP = 10
 	SimpleComplexity = 2
+	// Gen0 samples up to this many targets (breadth) instead of a single one, so
+	// one flaky/intermittent target can't prune an otherwise-good strategy.
+	Gen0Targets = 3
+	// ConfirmRepeats re-runs the final winner this many times on all targets; it
+	// is kept only if it clears the threshold in a strict majority (fluke filter).
+	ConfirmRepeats = 3
 )
 
 // Optimizer handles the evolutionary process for a specific phase
 type Optimizer struct {
-	Pool *container.WorkerPool
-	log  zerolog.Logger
+	Pool     *container.WorkerPool
+	log      zerolog.Logger
+	reporter *Reporter // optional; nil unless -report is set
 }
 
-func NewOptimizer(pool *container.WorkerPool, log zerolog.Logger) *Optimizer {
-	return &Optimizer{Pool: pool, log: log}
+func NewOptimizer(pool *container.WorkerPool, log zerolog.Logger, reporter *Reporter) *Optimizer {
+	return &Optimizer{Pool: pool, log: log, reporter: reporter}
 }
 
 func (o *Optimizer) RunPhase(
@@ -52,6 +59,22 @@ func (o *Optimizer) RunPhase(
 	}
 
 	phaseLog := o.log.With().Str("group", p.Name).Str("proto", proto).Str("filters", p.Filters).Logger()
+
+	// --- BASELINE (no desync): does the target already work unassisted? If so,
+	// emit NO strategy — forcing a desync onto an already-open connection can make
+	// the DPI flag+throttle it (proven on chaotic/garuda: a working 676 KB download
+	// collapsed to a 7.6 KB stall the instant a split profile was added).
+	if base, ok := o.runBaseline(ctx, p); ok {
+		rate := 0.0
+		if base.TotalCount > 0 {
+			rate = float64(base.SuccessCount) / float64(base.TotalCount)
+		}
+		if base.TotalCount > 0 && rate >= threshold {
+			phaseLog.Info().Float64("rate", rate).Msg("Target reachable WITHOUT bypass — no strategy needed (a desync here risks making it worse)")
+			return &model.ScoredStrategy{Baseline: true, Result: base}
+		}
+		phaseLog.Info().Float64("rate", rate).Str("reason", string(base.FailureType)).Msg("Baseline blocked — searching for a bypass")
+	}
 
 	// --- PRE-FLIGHT CHECK (Reuse Global Best) ---
 	if seed != nil {
@@ -90,8 +113,8 @@ func (o *Optimizer) RunPhase(
 		genLog.Info().Msg("Starting generation")
 
 		maxTargets := 0
-		if gen == 0 {
-			maxTargets = 1
+		if gen == 0 && len(p.Targets) > Gen0Targets {
+			maxTargets = Gen0Targets
 		}
 
 		results := o.executeBatch(ctx, population, p.Name, p.Filters, maxTargets)
@@ -111,6 +134,12 @@ func (o *Optimizer) RunPhase(
 			bestGen := results[0]
 			sBest, _ := bestGen.Config.(nfqws2.Strategy)
 			score := evolution.CalculateScore(bestGen.Result, bestGen.Complexity, sBest)
+
+			o.reporter.recordGen(p.Name, proto, p.Filters, genRecord{
+				Gen: gen, Population: len(population),
+				Best: bestGen.Config.String(), Score: score,
+				Success: bestGen.Result.SuccessCount, Total: bestGen.Result.TotalCount,
+			})
 
 			if bestGen.Result.SuccessCount > 0 {
 				if globalBest == nil {
@@ -154,7 +183,60 @@ func (o *Optimizer) RunPhase(
 		}
 	}
 
+	// --- CONFIRM the winner is robust, not a lucky single pass. Against
+	// probabilistic DPI one pass proves little (discord/chaotic flipped run to
+	// run), so re-test on all targets and keep it only on a majority.
+	if globalBest != nil && globalBest.Result.SuccessCount > 0 {
+		if !o.confirmWinner(ctx, *globalBest, p, threshold) {
+			phaseLog.Warn().Msg("Winner failed confirmation (likely a fluke) — discarding")
+			return nil
+		}
+		phaseLog.Info().Msg("Winner confirmed across repeat runs")
+	}
+
 	return globalBest
+}
+
+// runBaseline measures the provider's targets with NO desync (the worker skips
+// iptables/nfqws). It returns the raw result and whether the probe ran, so
+// RunPhase can skip evolution entirely when the target is already reachable.
+func (o *Optimizer) runBaseline(ctx context.Context, p types.ProviderDefinition) (model.WorkerResult, bool) {
+	req := model.WorkerRequest{
+		Baseline:    true,
+		TargetGroup: p.Name,
+		Filters:     strings.Fields(p.Filters),
+		MaxTargets:  0, // all targets
+	}
+	res, err := o.Pool.Exec(ctx, req)
+	if err != nil {
+		o.log.Warn().Err(err).Str("group", p.Name).Msg("Baseline probe failed; proceeding with evolution")
+		return model.WorkerResult{}, false
+	}
+	return res, true
+}
+
+// confirmWinner re-tests a candidate on all targets ConfirmRepeats times and
+// reports whether it clears the phase threshold in a strict majority of runs,
+// filtering flukes that pass once by chance against probabilistic DPI.
+func (o *Optimizer) confirmWinner(ctx context.Context, cand model.ScoredStrategy, p types.ProviderDefinition, threshold float64) bool {
+	strat, ok := cand.Config.(nfqws2.Strategy)
+	if !ok {
+		return true // non-strategy candidate isn't re-testable; don't block it
+	}
+	passes := 0
+	for range ConfirmRepeats {
+		if ctx.Err() != nil {
+			return passes > 0 // best-effort on cancellation
+		}
+		res := o.executeBatch(ctx, []nfqws2.Strategy{strat}, p.Name, p.Filters, 0)
+		if len(res) == 0 || res[0].Result.TotalCount == 0 {
+			continue
+		}
+		if float64(res[0].Result.SuccessCount)/float64(res[0].Result.TotalCount) >= threshold {
+			passes++
+		}
+	}
+	return passes*2 > ConfirmRepeats // strict majority
 }
 
 func (o *Optimizer) logNewBest(log zerolog.Logger, best *model.ScoredStrategy) {
